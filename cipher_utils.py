@@ -3,6 +3,7 @@
 Created on Thu Oct 17 22:17:13 2024
 
 @author: Noe
+@Nono5000
 """
 
 from nltk.util import bigrams
