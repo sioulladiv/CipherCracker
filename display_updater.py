@@ -1,3 +1,8 @@
+"""
+@author: Noe
+@Nono5000
+"""
+
 import sys
 
 def update_gui(pygame, agg, plt, gui_height, pkey, nkey, iteration, fitness_score, previous_fscore, pText, pText1, screen, font, fitness_scores):
