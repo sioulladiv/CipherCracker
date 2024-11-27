@@ -31,3 +31,11 @@ MAX_WORKERS = 4
 # Algorithm settings
 COOLING_RATE = 0.003
 INITIAL_TEMPERATURE = 2.0
+
+# Shuffle cipher settings
+MIN_SHUFFLE_GROUP = 2
+MAX_SHUFFLE_GROUP = 8
+
+# Polybius cipher settings
+POLYBIUS_CHARSET = 'ABCDEFGHIKLMNOPQRSTUVWXYZ'  # I/J combined
+POLYBIUS_SIZE = 5  # 5x5 grid

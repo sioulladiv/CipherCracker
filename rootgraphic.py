@@ -1,20 +1,21 @@
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox
-import subprocess
-from cipher_utils import bigram_fitness
-from MCMC_ALGO import transp_subst_run
+from cipher_manager import CipherManager
 import config
-from vigenere import VigenereCracker
 from tkinter import PhotoImage
 from ttkthemes import ThemedStyle
 from monogram_graph import MonogramGraph
+from multiprocessing import Process, Queue
+import queue
+import time  # Add this import
 
 
 class CipherDecoderGUI:
     def __init__(self, root):
         self.root = root
+        self.cipher_manager = CipherManager()
         self.root.title("Cipher Maxxer")
-        self.root.geometry("800x600")
+        self.root.geometry("800x700")
         
         # Apply modern theme
         self.style = ThemedStyle(self.root)
@@ -75,14 +76,33 @@ class CipherDecoderGUI:
         # Left side: Text input and buttons
         self.left_frame = ttk.Frame(self.main_container)
         self.left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        self.update_info = {}
+        self.update_info['time'] = ttk.Label(self.left_frame, text="time: 0")
+        self.update_info['Best Fitness'] = ttk.Label(self.left_frame, text="Best Fitness: 0")
+        self.update_info['Best text'] = ttk.Label(self.left_frame, text="Best text: 0")
+        self.update_info['Best key'] = ttk.Label(self.left_frame, text="Best key: 0")
+        for key in self.update_info:
+            self.update_info[key].pack(side=tk.TOP, anchor='w')
+            
+        # Add this line to track if decoding is running
+        self.is_decoding = False
+        
+        # Start the periodic update
+        self.update_interval = 500  # 500ms = 0.5 seconds
+        self.periodic_update()
+ 
+        # self.monogram_button = ttk.Button(
+        #     self.left_frame,
+        #     text="Character Frequencies",
+        #     command=self.show_monogram_window
+        # )
+        # self.monogram_button.pack(side=tk.LEFT, padx=2)
 
-        # Add monogram button
-        self.monogram_button = ttk.Button(
-            self.left_frame,
-            text="Character Frequencies",
-            command=self.show_monogram_window
-        )
-        self.monogram_button.pack(side=tk.LEFT, padx=2)
+        self.update_queue = Queue()
+        self.process = None
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+        self.start_time = None
 
     def on_tab_hover(self, event):
         """Add hover effect to tabs"""
@@ -132,12 +152,18 @@ class CipherDecoderGUI:
         
         # Cipher checkboxes
         self.var_substitution = tk.BooleanVar()
-        self.var_transposition = tk.BooleanVar()
+        self.var_transposition = tk.BooleanVar()  # Now used for shuffle
         self.var_vigenere = tk.BooleanVar()
         
         ttk.Checkbutton(cipher_frame, text="Substitution", variable=self.var_substitution).pack(side='left', padx=5)
-        ttk.Checkbutton(cipher_frame, text="Transposition", variable=self.var_transposition).pack(side='left', padx=5)
-        ttk.Checkbutton(cipher_frame, text="Vigenere", variable=self.var_vigenere, command=self.toggle_vigenere_settings).pack(side='left', padx=5)
+        ttk.Checkbutton(cipher_frame, text="Shuffle", variable=self.var_transposition, command=self.toggle_cipher_settings).pack(side='left', padx=5)
+        ttk.Checkbutton(cipher_frame, text="Vigenere", variable=self.var_vigenere, command=self.toggle_cipher_settings).pack(side='left', padx=5)
+        
+        # Add Polybius checkbox
+        self.var_polybius = tk.BooleanVar()
+        ttk.Checkbutton(cipher_frame, text="Polybius", 
+                        variable=self.var_polybius,
+                        command=self.toggle_cipher_settings).pack(side='left', padx=5)
         
         # Output frame
         output_frame = ttk.LabelFrame(self.main_tab, text="Output", padding="5")
@@ -155,6 +181,7 @@ class CipherDecoderGUI:
         
         # Add binding to text box for automatic updates
         self.text_box.bind('<<Modified>>', self.update_monogram)
+        #update = tk.Label(self, text="My clicker app").pack()
         
     def setup_settings_tab(self):
         self.vigenere_frame = ttk.LabelFrame(self.settings_tab, text="Vigenere Cipher Settings", padding="5")
@@ -212,24 +239,88 @@ class CipherDecoderGUI:
         self.key_length_var = tk.StringVar()
         ttk.Entry(key_override_frame, textvariable=self.key_length_var, width=5).pack(side='left', padx=2)
         ttk.Label(key_override_frame, text="(leave empty for auto-detection)").pack(side='left', padx=5)
+
+        # Add Shuffle Cipher Settings
+        self.shuffle_frame = ttk.LabelFrame(self.settings_tab, text="Shuffle Cipher Settings", padding="5")
+        self.shuffle_frame.pack(fill='x', padx=5, pady=5)
         
+        shuffle_group_frame = ttk.Frame(self.shuffle_frame)
+        shuffle_group_frame.pack(fill='x', padx=5, pady=5)
+        
+        ttk.Label(shuffle_group_frame, text="Group Size Range:").pack(side='left', padx=5)
+        self.min_shuffle_group = tk.StringVar(value="2")
+        self.max_shuffle_group = tk.StringVar(value="8")
+        ttk.Entry(shuffle_group_frame, textvariable=self.min_shuffle_group, width=5).pack(side='left', padx=2)
+        ttk.Label(shuffle_group_frame, text="to").pack(side='left', padx=2)
+        ttk.Entry(shuffle_group_frame, textvariable=self.max_shuffle_group, width=5).pack(side='left', padx=2)
+        
+        # Force specific group size
+        shuffle_override_frame = ttk.Frame(self.shuffle_frame)
+        shuffle_override_frame.pack(fill='x', padx=5, pady=5)
+        
+        ttk.Label(shuffle_override_frame, text="Force Group Size:").pack(side='left', padx=5)
+        self.force_group_size = tk.StringVar()
+        ttk.Entry(shuffle_override_frame, textvariable=self.force_group_size, width=5).pack(side='left', padx=2)
+        ttk.Label(shuffle_override_frame, text="(leave empty for auto-detection)").pack(side='left', padx=5)
+        
+        # Initially hide Shuffle settings
+        self.shuffle_frame.pack_forget()
+        
+        # Add Polybius Settings
+        self.polybius_frame = ttk.LabelFrame(self.settings_tab, text="Polybius Cipher Settings", padding="5")
+        self.polybius_frame.pack(fill='x', padx=5, pady=5)
+        
+        # Initial key input
+        key_frame = ttk.Frame(self.polybius_frame)
+        key_frame.pack(fill='x', padx=5, pady=5)
+        
+        ttk.Label(key_frame, text="Initial Key:").pack(side='left', padx=5)
+        self.polybius_key = tk.StringVar()
+        ttk.Entry(key_frame, textvariable=self.polybius_key, width=25).pack(side='left', padx=2)
+        ttk.Label(key_frame, text="(optional)").pack(side='left', padx=5)
+        
+        # Initially hide Polybius settings
+        self.polybius_frame.pack_forget()
+
     def toggle_vigenere_settings(self):
         if self.var_vigenere.get():
             self.vigenere_frame.pack(fill='x', padx=5, pady=5)
         else:
             self.vigenere_frame.pack_forget()
+
+    def toggle_cipher_settings(self):
+        """Show/hide cipher specific settings based on selection"""
+        if self.var_vigenere.get():
+            self.vigenere_frame.pack(fill='x', padx=5, pady=5)
+        else:
+            self.vigenere_frame.pack_forget()
+            
+        if self.var_transposition.get():
+            self.shuffle_frame.pack(fill='x', padx=5, pady=5)
+        else:
+            self.shuffle_frame.pack_forget()
+            
+        if self.var_polybius.get():
+            self.polybius_frame.pack(fill='x', padx=5, pady=5)
+        else:
+            self.polybius_frame.pack_forget()
             
     def save_settings(self):
-        try:
-            config.MIN_KEY_LENGTH = int(self.min_key.get())
-            config.MAX_KEY_LENGTH = int(self.max_key.get())
-            config.EXPECTED_IOC = float(self.expected_ioc.get())
-            config.TARGET_FITNESS = float(self.target_fitness.get())
-            config.MAX_ITERATIONS = int(self.max_iterations.get())
-            config.USE_PARALLEL = self.use_parallel.get()
-            config.MAX_WORKERS = int(self.max_workers.get())
+        settings = {
+            'min_key_length': self.min_key.get(),
+            'max_key_length': self.max_key.get(),
+            'expected_ioc': self.expected_ioc.get(),
+            'target_fitness': self.target_fitness.get(),
+            'max_iterations': self.max_iterations.get(),
+            'use_parallel': self.use_parallel.get(),
+            'max_workers': self.max_workers.get(),
+            'min_shuffle_group': self.min_shuffle_group.get(),
+            'max_shuffle_group': self.max_shuffle_group.get()
+        }
+        
+        if self.cipher_manager.update_config(settings):
             messagebox.showinfo("Success", "Settings saved successfully!")
-        except ValueError as e:
+        else:
             messagebox.showerror("Error", "Invalid input values. Please check your settings.")
             
     def run_mcmc_algo(self):
@@ -238,51 +329,69 @@ class CipherDecoderGUI:
             messagebox.showwarning("Warning", "Please enter cipher text!")
             return
                 
-        selected_ciphers = []
+        self.selected_ciphers = []
         if self.var_substitution.get():
-            selected_ciphers.append('substitution')
-        if self.var_transposition.get():
-            selected_ciphers.append('transposition')
+            self.selected_ciphers.append('substitution')
+        if self.var_transposition.get():  # Now checks for shuffle cipher
+            self.selected_ciphers.append('shuffle')
         if self.var_vigenere.get():
-            selected_ciphers.append('vigenere')
+            self.selected_ciphers.append('vigenere')
+        if self.var_polybius.get():
+            self.selected_ciphers.append('polybius')
                 
-        if not selected_ciphers:
+        if not self.selected_ciphers:
             messagebox.showwarning("Warning", "Please select at least one cipher type!")
             return
         
         try:
-            if 'vigenere' in selected_ciphers:
+            self.is_decoding = True  # Set flag when starting decode
+            self.start_time = time.time()  # Start timing when decoding begins
+            if 'vigenere' in self.selected_ciphers:
                 self.run_vigenere_decoder(cipher_text)
+            elif 'shuffle' in self.selected_ciphers:  # Changed from transposition
+                self.run_shuffle_decoder(cipher_text)
+            elif 'polybius' in self.selected_ciphers:
+                self.run_polybius_decoder(cipher_text)
             else:
-                result = transp_subst_run(cipher_text, selected_ciphers[0])
-                
-                self.output_text.delete('1.0', tk.END)
-                
-                # Create default values if result is None
-                if result is None:
-                    result = {
-                        'text': 'N/A',
-                        'key': 'N/A',
-                        'score': 0.0,
-                        'iterations': 0
-                    }
-                    messagebox.showwarning("Warning", "Decryption was interrupted")
-                    output_text = "Decryption was interrupted.\n"
-                else:
-                    output_text = "Decryption completed.\n"
-                
-                # Safely access dictionary values with defaults
-                output_text += f"Key: {str(result.get('key', 'N/A'))}\n"
-                output_text += f"Fitness Score: {result.get('score', 0.0):.4f}\n"
-                output_text += f"Iterations: {result.get('iterations', 0)}\n"
-                output_text += f"Decrypted Text: {str(result.get('text', 'N/A'))}"
-
-                
-                self.output_text.insert('1.0', output_text)
+                # Start decoding in separate process
+                self.process = Process(
+                    target=self.cipher_manager.run_substitution_decoder,
+                    args=(cipher_text, None, None, self.update_queue)
+                )
+                self.process.start()
+                self.check_process()
         except Exception as e:
             messagebox.showerror("Error", f"An error occurred: {str(e)}")
-              
-        
+            self.is_decoding = False
+
+    def check_process(self):
+        """Check for updates from the decoding process"""
+        if self.is_decoding:
+            latest_update = None
+            # Empty the queue and keep only the latest update
+            try:
+                while True:
+                    update = self.update_queue.get_nowait()
+                    if update.get('type') == 'progress':
+                        latest_update = update
+                    elif update.get('type') == 'finished':
+                        self.is_decoding = False
+                        self.display_result(update['result'])
+                        return
+            except queue.Empty:
+                pass
+
+            # Process only the most recent update
+            if latest_update:
+                current_time = time.time() - self.start_time
+                self.update_info['time'].config(text=f"Time: {current_time:.1f}s")
+                self.update_info['Best Fitness'].config(text=f"Best Fitness: {latest_update['score']:.4f}")
+                self.update_info['Best text'].config(text=f"Best text: {latest_update['text'][:50]}...")
+                self.update_info['Best key'].config(text=f"Best key: {latest_update['key']}")
+            
+            # Schedule next check
+            self.root.after(self.update_interval, self.check_process)
+            
     # Add this new method to CipherDecoderGUI class
     def run_vigenere_decoder(self, cipher_text):
         """Handle Vigenere cipher decoding"""
@@ -295,37 +404,107 @@ class CipherDecoderGUI:
             self.output_text.see('end')
             self.root.update()
         
-        try:
-            # Initialize cracker with progress callback
-            cracker = VigenereCracker()
-            cracker.progress_callback = progress_callback
-            
-            # Get key length from GUI if specified
-            forced_length = None
-            if hasattr(self, 'key_length_var') and self.key_length_var.get():
-                try:
-                    forced_length = int(self.key_length_var.get())
-                except ValueError:
-                    pass
-            
-            # Run decryption
-            plaintext, key, score = cracker.decrypt(cipher_text, forced_length)
-            
-            # Format and display results
-            result = f"\n=== Decryption Results ===\n"
-            result += f"Key found: {key}\n"
-            result += f"Fitness score: {score:.4f}\n"
-            result += f"\nDecrypted text:\n{plaintext}\n"
-            
-            self.output_text.insert('end', result)
+        forced_length = None
+        if hasattr(self, 'key_length_var') and self.key_length_var.get():
+            try:
+                forced_length = int(self.key_length_var.get())
+            except ValueError:
+                pass
+
+        result = self.cipher_manager.run_vigenere_decoder(
+            cipher_text, 
+            forced_length, 
+            progress_callback
+        )
+
+        if result['success']:
+            self.display_vigenere_result(result)
+        else:
+            messagebox.showerror("Error", f"Decryption failed: {result['error']}")
+
+    def run_shuffle_decoder(self, cipher_text):
+        """Handle Shuffle cipher decoding"""
+        self.output_text.delete('1.0', tk.END)
+        
+        def progress_callback(message):
+            self.output_text.insert('end', f"{message}\n")
             self.output_text.see('end')
+            self.root.update()
+        
+        forced_size = None
+        if self.force_group_size.get():
+            try:
+                forced_size = int(self.force_group_size.get())
+            except ValueError:
+                pass
+
+        result = self.cipher_manager.run_shuffle_decoder(
+            cipher_text,
+            forced_size,
+            progress_callback
+        )
+
+        if result['success']:
+            self.display_shuffle_result(result)
+        else:
+            messagebox.showerror("Error", f"Decryption failed: {result['error']}")
+
+    def display_shuffle_result(self, result):
+        """Display Shuffle decoder results"""
+        self.output_text.delete('1.0', tk.END)
+        
+        if result['success']:
+            output_text = "=== Shuffle Decryption Results ===\n"
+            output_text += f"Permutation: {result['key']}\n"
+            output_text += f"Group size: {len(result['key'])}\n"
+            output_text += f"Fitness score: {result['score']:.4f}\n"
+            output_text += f"\nDecrypted text:\n{result['plaintext']}\n"
             
-            # Show success message
-            messagebox.showinfo("Success", f"Decryption completed!\nKey found: {key}")
+            self.output_text.insert('1.0', output_text)
+            messagebox.showinfo("Success", f"Decryption completed! Group size: {len(result['key'])}")
+        else:
+            error_msg = f"Decryption failed: {result.get('error', 'Unknown error')}"
+            self.output_text.insert('1.0', error_msg)
+            messagebox.showerror("Error", error_msg)
+
+    def run_polybius_decoder(self, cipher_text):
+        """Handle Polybius cipher decoding"""
+        self.output_text.delete('1.0', tk.END)
+        
+        def progress_callback(message):
+            self.output_text.insert('end', f"{message}\n")
+            self.output_text.see('end')
+            self.root.update()
+
+        initial_key = self.polybius_key.get() if self.polybius_key.get() else None
+        
+        result = self.cipher_manager.run_polybius_decoder(
+            cipher_text,
+            initial_key,
+            progress_callback
+        )
+
+        if result['success']:
+            self.display_polybius_result(result)
+        else:
+            messagebox.showerror("Error", f"Decryption failed: {result['error']}")
+
+    def display_polybius_result(self, result):
+        """Display Polybius decoder results"""
+        self.output_text.delete('1.0', tk.END)
+        
+        if result['success']:
+            output_text = "=== Polybius Decryption Results ===\n"
+            output_text += f"Key: {result['key']}\n"
+            output_text += f"Fitness score: {result['score']:.4f}\n"
+            output_text += f"\nDecrypted text:\n{result['plaintext']}\n"
             
-        except Exception as e:
-            self.output_text.insert('end', f"\nError: {str(e)}")
-            messagebox.showerror("Error", f"Decryption failed: {str(e)}")
+            self.output_text.insert('1.0', output_text)
+            messagebox.showinfo("Success", "Decryption completed!")
+        else:
+            error_msg = f"Decryption failed: {result.get('error', 'Unknown error')}"
+            self.output_text.insert('1.0', error_msg)
+            messagebox.showerror("Error", error_msg)
 
     # Add this wherever you handle text changes
     def update_text(self, event=None):
@@ -360,6 +539,47 @@ class CipherDecoderGUI:
         # Reset modified flag
         self.text_box.edit_modified(False)
 
+    def display_result(self, result):
+        """Display MCMC decoder results"""
+        self.output_text.delete('1.0', tk.END)
+        
+        if result['success']:
+            output_text = "Decryption completed.\n"
+            output_text += f"Key: {str(result.get('key', 'N/A'))}\n"
+            output_text += f"Fitness Score: {result.get('score', 0.0):.4f}\n"
+            output_text += f"Iterations: {result.get('iterations', 0)}\n"
+            output_text += f"Decrypted Text: {str(result.get('text', 'N/A'))}"
+        else:
+            output_text = f"Decryption failed: {result.get('error', 'Unknown error')}\n"
+            
+        self.output_text.insert('1.0', output_text)
+
+    def display_vigenere_result(self, result):
+        """Display Vigenere decoder results"""
+        self.output_text.delete('1.0', tk.END)
+        
+        if result['success']:
+            output_text = "=== Decryption Results ===\n"
+            output_text += f"Key found: {result['key']}\n"
+            output_text += f"Fitness score: {result['score']:.4f}\n"
+            output_text += f"\nDecrypted text:\n{result['plaintext']}\n"
+            
+            self.output_text.insert('1.0', output_text)
+            messagebox.showinfo("Success", f"Decryption completed! Key found: {result['key']}")
+        else:
+            error_msg = f"Decryption failed: {result.get('error', 'Unknown error')}"
+            self.output_text.insert('1.0', error_msg)
+            messagebox.showerror("Error", error_msg)
+
+    def periodic_update(self):
+        """Remove this method since we're now handling updates in check_process"""
+        pass
+
+    def on_closing(self):
+        if self.process and self.process.is_alive():
+            self.process.terminate()
+        self.root.destroy()
+
 # Add this class after CipherDecoderGUI class
 class MonogramWindow:
     def __init__(self, parent, text_widget):
@@ -386,9 +606,12 @@ class MonogramWindow:
             self.text_widget.edit_modified(False)
 
 def main():
+
     root = tk.Tk()
     app = CipherDecoderGUI(root)
     root.mainloop()
 
+if __name__ == "__main__":
+    main()
 if __name__ == "__main__":
     main()

@@ -1,169 +1,148 @@
 import string
-from collections import Counter, defaultdict
-from concurrent.futures import ThreadPoolExecutor
+import random
+import math
+from collections import Counter
 from cipher_utils import bigram_fitness
 import argparse
 from config import *
-from typing import Dict, Optional
-import random
-import string
-import random
-from collections import Counter
+import time
+from multiprocessing import Value, Array
+import ctypes
 
 class SubstitutionCracker:
     def __init__(self):
         self.LETTERS = string.ascii_uppercase
-        self.COMMON_WORDS = {'THE', 'BE', 'TO', 'OF', 'AND', 'IN', 'THAT', 'IS'}
-        self.COMMON_PATTERNS = {
-            'TH', 'HE', 'AN', 'IN', 'ER', 'ON', 'RE', 'ED', 'ND', 'HA', 'AT', 'EN', 'ES', 'OF', 'NT', 'EA', 'TI', 'TO', 'IO', 'LE', 'IS', 'OU', 'AR', 'AS', 'DE', 'RT', 'VE'
+        self.progress_callback = None
+        self.temperature = 10.0
+        self.cooling_rate = 0.95
+        self.iterations = 10000
+        self.start_time = None
+        self.best_score = float('inf')
+        self.best_text = ""
+        self.best_key = ""
+        self.queue = None  # Add this line
+        # Add shared memory variables
+        self.shared_score = Value(ctypes.c_double, float('inf'))
+        self.shared_text = Array(ctypes.c_char, 1000)  # Adjust size as needed
+        self.shared_key = Array(ctypes.c_char, 27)  # Length of alphabet + 1
+        self.start_time = None
+
+    def update_progress(self, message):
+        """Update progress if callback is set"""
+        if self.progress_callback:
+            self.progress_callback(message)
+
+    def create_random_key(self):
+        """Generate random initial substitution key"""
+        letters = list(self.LETTERS)
+        random.shuffle(letters)
+        return ''.join(letters)
+
+    def swap_letters(self, key):
+        """Create new key by swapping two random positions"""
+        pos1, pos2 = random.sample(range(26), 2)
+        key_list = list(key)
+        key_list[pos1], key_list[pos2] = key_list[pos2], key_list[pos1]
+        return ''.join(key_list)
+
+    def decrypt_with_key(self, ciphertext, key):
+        """Decrypt text using substitution key"""
+        trans = str.maketrans(self.LETTERS, key)
+        return ciphertext.translate(trans)
+    
+    def updateMssg(self):
+        """Return current best metrics and elapsed time"""
+        current_time = time.time() - (self.start_time or time.time())
+        return {
+            'time': f"{current_time:.1f}s",
+            'best_score': self.shared_score.value,
+            'best_text': self.shared_text.value.decode(),
+            'best_key': self.shared_key.value.decode()
         }
-    def get_initial_mapping(self, freq) -> dict:
-        """Generate initial random mapping for substitution cipher.
-        
-        Args:
-            freq: Counter object with letter frequencies
-            
-        Returns:
-            dict: Mapping of characters to their substitutions
-        """
-        # Standard alphabet
-        alphabet = string.ascii_uppercase
-        
-        # Create shuffled version of alphabet
-        shuffled = list(alphabet)
-        random.shuffle(shuffled)
-        
-        # Create mapping dictionary
-        mapping = {}
-        for a, b in zip(alphabet, shuffled):
-            mapping[a] = b
-            mapping[a.lower()] = b.lower()
-        
-        return mapping
 
-    def analyze_patterns(self, text):
-        """Find repeated patterns and word structures"""
-        words = text.split()
-        patterns = {}
-        
-        for word in words:
-            # Create pattern like: HELLO -> 12334
-            seen = {}
-            pattern = ''
-            for c in word:
-                if c not in seen:
-                    seen[c] = str(len(seen) + 1)
-                pattern += seen[c]
-            patterns[pattern] = patterns.get(pattern, []) + [word]
-            
-        return patterns
+    def monte_carlo_optimization(self, ciphertext):
+        """Optimize key using Monte Carlo with simulated annealing"""
+        self.start_time = time.time()
+        current_key = self.create_random_key()
+        current_score = bigram_fitness(self.decrypt_with_key(ciphertext, current_key))
+        self.best_key = current_key
+        self.best_score = current_score
+        temp = self.temperature
 
-    def score_solution(self, text):
-        """Score based on n-grams and word patterns"""
-        score = bigram_fitness(text)
-        
-        # Bonus for common English patterns
-        for pattern in self.COMMON_PATTERNS:
-            if pattern in text:
-                score *= 0.95
+        for i in range(self.iterations):
+            if i % 100 == 0:
+                self.update_progress(f"Optimization iteration {i}/{self.iterations}")
+            
+            # Generate neighbor solution
+            self.best_text = self.decrypt_with_key(ciphertext, self.best_key)
+            new_key = self.swap_letters(current_key)
+            new_score = bigram_fitness(self.decrypt_with_key(ciphertext, new_key))
+            
+            # Calculate acceptance probability
+            delta = new_score - current_score
+            if delta < 0 or random.random() < math.exp(-delta / temp):
+                current_key = new_key
+                current_score = new_score
                 
-        # Bonus for common words
-        words = text.split()
-        for word in words:
-            if word in self.COMMON_WORDS:
-                score *= 0.9
-                
-        return score
+                if current_score < self.best_score:
+                    self.best_score = current_score
+                    self.best_key = current_key
+                    self.best_text = self.decrypt_with_key(ciphertext, current_key)
+                    
+                    # Update shared memory
+                    self.shared_score.value = current_score
+                    self.shared_text.value = self.best_text[:1000].encode()
+                    self.shared_key.value = current_key.encode()
+                    
+                    if self.queue:
+                        self.queue.put({
+                            'type': 'progress',
+                            'score': self.shared_score.value,
+                            'text': self.shared_text.value.decode(),
+                            'key': self.shared_key.value.decode()
+                        })
+                    self.update_progress(f"New best score: {self.best_score:.4f}")
+                    if self.best_score < 0.41:
+                        break
+            
+            # Cool down
+            temp *= self.cooling_rate
 
-    def smart_swap(self, key, ciphertext):
-        """Make intelligent swaps based on patterns"""
-        new_key = key.copy()
-        
-        # Try swapping letters that appear in similar positions
-        pos_freq = defaultdict(Counter)
-        for i, c in enumerate(ciphertext):
-            pos_freq[i % 3][c] += 1
-            
-        # Find letters that might be related
-        related = []
-        for pos in pos_freq:
-            common = pos_freq[pos].most_common(3)
-            related.extend([pair[0] for pair in common])
-            
-        if related:
-            c1, c2 = random.sample(related, 2)
-            new_key[c1], new_key[c2] = new_key[c2], new_key[c1]
-            
-        return new_key
+        return self.best_key, self.best_score
 
     def decrypt(self, ciphertext):
-        """Main solving method"""
-        text = ''.join(c for c in ciphertext.upper() if c.isalpha())
-        patterns = self.analyze_patterns(text)
-        
-        # Initial key based on frequency analysis
-        freq = Counter(text)
-        initial_key = self.get_initial_mapping(freq)
-        
-        best_key = initial_key
-        best_score = float('inf')
-        temperature = 2.0
-        
-        for iteration in range(10000):
-            new_key = self.smart_swap(best_key, text)
-            plaintext = ''.join(new_key[c] for c in text)
-            score = self.score_solution(plaintext)
-            
-            if score < best_score:
-                best_score = score
-                best_key = new_key
-                print(f"Better solution (score: {score:.4f})")
-                print(plaintext[:50])
-                
-            temperature *= 0.997
-            
-        return plaintext, best_key, best_score
+        """Main decryption method"""
+        self.update_progress("Preprocessing input text...")
+        ciphertext = ''.join(c.upper() for c in ciphertext if c.isalpha())
+        if not ciphertext:
+            raise ValueError("No valid characters in input text")
+
+        self.update_progress("Starting Monte Carlo optimization...")
+        key, score = self.monte_carlo_optimization(ciphertext)
+        plaintext = self.decrypt_with_key(ciphertext, key)
+
+        return plaintext, key, score
+
+def main():
+    parser = argparse.ArgumentParser(description='Substitution Cipher Decoder')
+    parser.add_argument('-t', '--temperature', type=float, help='Initial temperature for simulated annealing')
+    parser.add_argument('-i', '--iterations', type=int, help='Number of iterations')
+    args = parser.parse_args()
+
+    cracker = SubstitutionCracker()
+    if args.temperature:
+        cracker.temperature = args.temperature
+    if args.iterations:
+        cracker.iterations = args.iterations
+
+    ciphertext = "XK ANRD MSRDWNE, T SZBN FSTE WNFFND PTYAE KZG INWW DNEFNA, PZD T SRHN FSN XZEF EGDBDTETYQ YNIE. NJBNMFTYQ R DNBWK PDZX XTEE IRDYN T SRHN ONNY IRTFTYQ NRQNDWK PZD FSN BZEF, TY FSN SZBN FSRF ESN IZGWA ON ROWN FZ ESNA XZDN WTQSF ZY FSN XKEFNDK ZP FSN ETWHND OGWWNF. ISRF T ATA YZF NJBNMF ISNY FSN AZZDONWW DRYQ IRE FSRF XTEE IRDYN SNDENWP IZGWA ON GESNDNA TYFZ XK XZDYTYQ DZZX! ESN IRE EZXNISRF ATESNHNWWNA RYA MWZEN FZ EFRDHTYQ, RE TP ESN SRA IRWVNA SNDN, RYA TF FZZV EZXN FTXN PZD SND FZ DNMZHND NYZGQS FZ FNWW XN ISRF ESN IRE AZTYQ TY NYQWRYA. TF RBBNRDE FSRF ESN FZZV FZ SNRDF ZGD MZYMNDY FSRF FSTE XRFFND IZGWA ON ANWRKNA OK FSN MZYFTYGRW NJMSRYQN ZP WNFFNDE, RYA, ATEMZHNDTYQ FSRF FSN ESTBBTYQ MDRFNE INDN FZ ON FDRYEBZDFNA FZ NYQWRYA ZY FSN BRMTPTM ESN XRAN RDDRYQNXNYFE FZ FDRHNW ITFS FSN MRDQZ. ISRF RDDRYQNXNYFE FSZEN XTQSF SRHN ONNY ESN SRE ONNY FZZ MZK FZ NJBWRTY. PZD FSN XZXNYF T SRHN WZAQNA SND ITFS XK XRTA TY FSN RFFTM SNDN RF FSN FZINDE. FSN EFRPP SRHN ONNY XRDHNWWZGE, BDZHTATYQ SND ITFS EGTFROWN MWZFSNE, RYA ESRDTYQ XNRWE. T RX YZF EGDN SZI XTEE IRDYN ITWW XRYRQN TY FSN WZYQND FNDX, OGF PZD YZI ESN TE ENFFWNA RYA T FSTYV IN ESZGWA MZYMNYFDRFN ZGD RFFNYFTZY ZY FSN TYPZDXRFTZY FSRF ESN SRE ODZGQSF ITFS SND. QTHNY FSRF FSNDN TE R ENYETFTHTFK FZ FSTE XRFFND, T IZGWA BDNPND FZ FNWW KZG ROZGF TF TY BNDEZY. TY RYK MREN, KZG XRK INWW ITES FZ SNRD FSN EFZDK PDZX XTEE IRDYN SNDENWP, EZ T BDZBZEN FSRF IN XNNF SNDN RF SZDEWNK RF KZGD NRDWTNEF MZYHNYTNYMN. TY R MGDTZGE MZTYMTANYMN ZP FTXTYQ ETD MSRDWNE TE RWEZ BWRYYTYQ FZ HTETF ESZDFWK FZ ATEMGEE TYEFRWWTYQ STE FNWNQDRBSTM EKEFNX RF ZGD DNETANYMNE TY ZDAND FZ EBNNA MZXXGYTMRFTZY. BNDSRBE IN MRY RDDRYQN XRFFNDE EZ FSRF SN FZZ MRY ON ODTNPNA ZY FSN TEEGNE TY FSTE MREN. EBNRVTYQ ZP ODTNPTYQ, T FSTYV TF IZGWA ON RBBDZBDTRFN FZ VNNB WZDA BRWXNDEFZY TYPZDXNA ZP ZGD TYHNEFTQRFTZYE. ITFSZGF ERKTYQ FZZ XGMS RF FSTE EFRQN, FSNDN RDN ATBWZXRFTM TEEGNE RF BWRK, RYA SN XTQSF BDNPND FZ WNRA ZY FSNEN XRFFNDE. MZGWA T REV KZG FZ IDTFN FZ STX? KZG VYZI SZI SN SRFNE FZ ON OZFSNDNA OK IZXNY. TF XTQSF ON R QZZA TANR FZ NYMTBSND RWW ZGD MZXXGYTMRFTZYE ITFS STE ZPPTMN GETYQ ZGD MGEFZXRDK FDRYEBZETFTZY MTBSND. T AZ YZF NYFTDNWK FDGEF FSN ATEMDNFTZY ZP FSZEN TY STE BDTHRFN ZPPTMN. ITFS XK PZYANEF DNQRDAE, RAR"
+
+    plaintext, key, score = cracker.decrypt(ciphertext)
     
+    print(f"\nFinal Results:")
+    print(f"Key: {key}")
+    print(f"Score: {score:.4f}")
+    print(f"Decrypted text: {plaintext[:100]}...")
+
 if __name__ == "__main__":
-    # Default variables that can be modified directly
-    input_file = 'ciphertext.txt'
-    cipher_type = 'substitution'
-
-    try:
-        with open(input_file, 'r') as f:
-            ciphertext = f.read()
-
-        cracker = SubstitutionCracker()
-        plaintext, key, score = cracker.decrypt(ciphertext)
-
-        print(f"\nFinal Results:")
-        print(f"Key: {key}")
-        print(f"Score: {score:.4f}")
-        print(f"Decrypted text:\n{plaintext[:200]}...")
-
-    except FileNotFoundError:
-        print(f"Error: Could not find file '{input_file}'")
-    except Exception as e:
-        print(f"Error: {str(e)}")
-
-
-def create_substitution_map(pattern: str, replacement: str) -> Dict[str, str]:
-    """Create a substitution mapping from pattern to replacement."""
-    if len(pattern) != len(replacement):
-        raise ValueError("Pattern and replacement must be same length")
-    return dict(zip(pattern, replacement))
-
-def fast_substitution(text: str, pattern: str, replacement: str) -> str:
-    """
-    Perform fast substitution using dictionary mapping.
-    Similar to decode's technique but for substitution.
-    """
-    # Create mapping dictionary
-    sub_map = create_substitution_map(pattern, replacement)
-    
-    # Default to original character if no substitution exists
-    mapping = defaultdict(lambda: None)
-    mapping.update(sub_map)
-    
-    # Perform substitution using join for efficiency
-    return ''.join(mapping[c] or c for c in text)
+    main()
