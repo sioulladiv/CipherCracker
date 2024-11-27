@@ -509,7 +509,7 @@ class CipherDecoderGUI:
     # Add this wherever you handle text changes
     def update_text(self, event=None):
         text = self.text_input.get("1.0", tk.END)  # Assuming you have a text input widget
-        self.monogram_graph.update_graph(text)
+        self.monogram_graph.update_graph(text.replace(" ",""))
         self.text_input.bind("<KeyRelease>", self.update_text)
 
     # Update show_monogram_window method
