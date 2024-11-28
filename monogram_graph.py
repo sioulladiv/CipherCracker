@@ -19,7 +19,7 @@ class MonogramGraph(ttk.Frame):
             return
             
         # Calculate frequencies
-        char_freq = Counter(text.lower())
+        char_freq = Counter(text.lower().replace(" ",""))
         chars = list(char_freq.keys())
         freqs = list(char_freq.values())
         
