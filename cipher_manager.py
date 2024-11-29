@@ -1,11 +1,6 @@
 from cipher_utils import bigram_fitness
-from substitution import SubstitutionCracker
 import config
-
-#you are so silly
-from vigenere import VigenereCracker
-from shuffle import ShuffleCracker
-from polybius import PolybiusCracker
+from ciphers import VigenereCracker, SubstitutionCracker, ShuffleCracker, PolybiusCracker
 
 class CipherManager:
     def __init__(self):
@@ -14,7 +9,26 @@ class CipherManager:
         self.shuffle_cracker = ShuffleCracker()
         self.polybius_cracker = PolybiusCracker()
 
+    def stop_vigenere_decoder(self):
+        """Stop Vigenere cracker process"""
+        if hasattr(self.vigenere_cracker, 'running'):
+            self.vigenere_cracker.running = False
     
+    def stop_substitution_decoder(self):
+        """Stop substitution cracker process"""
+        if hasattr(self.substitution_cracker, 'running'):
+            self.substitution_cracker.running = False
+
+    def stop_shuffle_decoder(self):
+        """Stop shuffle cracker process"""
+        if hasattr(self.shuffle_cracker, 'running'):
+            self.shuffle_cracker.running = False
+            
+    def stop_polybius_decoder(self):
+        """Stop polybius cracker process"""
+        if hasattr(self.polybius_cracker, 'running'):
+            self.polybius_cracker.running = False
+
     def updateInfoSubstition(self):
         """Get current metrics from substitution cracker"""
         return self.substitution_cracker.updateMssg()
@@ -122,3 +136,47 @@ class CipherManager:
                 'success': False,
                 'error': str(e)
             }
+
+    def get_current_substitution_result(self):
+        """Get current best result from substitution cracker"""
+        if not hasattr(self.substitution_cracker, 'best_text'):
+            return None
+        return {
+            'success': True,
+            'text': self.substitution_cracker.best_text,
+            'key': self.substitution_cracker.best_key,
+            'score': self.substitution_cracker.best_score
+        }
+
+    def get_current_vigenere_result(self):
+        """Get current best result from vigenere cracker"""
+        if not hasattr(self.vigenere_cracker, 'best_text'):
+            return None
+        return {
+            'success': True,
+            'plaintext': self.vigenere_cracker.best_text,
+            'key': self.vigenere_cracker.best_key,
+            'score': self.vigenere_cracker.best_score
+        }
+
+    def get_current_shuffle_result(self):
+        """Get current best result from shuffle cracker"""
+        if not hasattr(self.shuffle_cracker, 'best_text'):
+            return None
+        return {
+            'success': True,
+            'plaintext': self.shuffle_cracker.best_text,
+            'key': self.shuffle_cracker.best_key,
+            'score': self.shuffle_cracker.best_score
+        }
+
+    def get_current_polybius_result(self):
+        """Get current best result from polybius cracker"""
+        if not hasattr(self.polybius_cracker, 'best_text'):
+            return None
+        return {
+            'success': True,
+            'plaintext': self.polybius_cracker.best_text,
+            'key': self.polybius_cracker.best_key,
+            'score': self.polybius_cracker.best_score
+        }

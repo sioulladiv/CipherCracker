@@ -7,7 +7,8 @@ from ttkthemes import ThemedStyle
 from monogram_graph import MonogramGraph
 from multiprocessing import Process, Queue
 import queue
-import time  # Add this import
+import time
+from colours import ColorPalettes
 
 
 class CipherDecoderGUI:
@@ -16,270 +17,357 @@ class CipherDecoderGUI:
         self.cipher_manager = CipherManager()
         self.root.title("Cipher Maxxer")
         self.root.geometry("800x700")
-        
-        # Apply modern theme
+
+        self.theme = None
+
+        color_palettes = ColorPalettes(self.theme)
+        self.colors = color_palettes.colors
+        self.root.configure(bg=self.colors['background'])
+        self.root.option_add("*Font", "Consolas 10")
+        self.root.option_add("*foreground", self.colors['text'])
+        self.root.option_add("*background", self.colors['background'])
+        self.root.option_add("*selectBackground", self.colors['primary'])
+        self.root.option_add("*selectForeground", self.colors['background'])
         self.style = ThemedStyle(self.root)
-        self.style.set_theme("equilux")  # Modern dark theme
-        
-        # Configure colors
-        self.bg_color = "#2E2E2E"
-        self.accent_color = "#007ACC"
-        self.text_color = "#FFFFFF"
-        
-        # Set window background
-        self.root.configure(bg=self.bg_color)
-        
-        # Load and set icon
+        self.style.set_theme("equilux")
+        self.style.configure("Cyber.TFrame",
+            background=self.colors['background'],
+            borderwidth=2,
+            relief="solid"
+        )
+        self.style.configure("Cyber.TLabel",
+            background=self.colors['background'],
+            foreground=self.colors['primary'],
+            font=("Consolas", 10)
+        )
+        self.style.configure("Cyber.TButton",
+            background=self.colors['dark_element'],
+            foreground=self.colors['primary'],
+            borderwidth=2,
+            relief="solid",
+            font=("Consolas", 10, "bold"),
+            padding=(15, 5)
+        )
+        self.style.map("Cyber.TButton",
+            background=[('active', self.colors['primary'])],
+            foreground=[('active', self.colors['background'])],
+            relief=[('pressed', 'sunken')]
+        )
+        self.style.configure("Cyber.TNotebook",
+            background=self.colors['background'],
+            foreground=self.colors['text'],
+            borderwidth=2,
+            relief="solid"
+        )
+        self.style.configure("Cyber.TNotebook.Tab",
+            background=self.colors['dark_element'],
+            foreground=self.colors['text'],
+            padding=(10, 2),
+            font=("Consolas", 9)
+        )
+        self.style.map("Cyber.TNotebook.Tab",
+            background=[('selected', self.colors['primary'])],
+            foreground=[('selected', self.colors['background'])]
+        )
+        text_config = {
+            'background': self.colors['dark_element'],
+            'foreground': self.colors['text'],
+            'insertbackground': self.colors['primary'],
+            'selectbackground': self.colors['primary'],
+            'selectforeground': self.colors['background'],
+            'borderwidth': 2,
+            'relief': 'solid',
+            'font': ('Consolas', 10),
+            'insertwidth': 3
+        }
+        self.root.option_add("*Text.background", self.colors['dark_element'])
+        self.root.option_add("*Text.foreground", self.colors['text'])
         icon = PhotoImage(file='icon.png')
         self.root.iconphoto(True, icon)
-        
-        # Custom style configurations
-        self.style.configure("Custom.TNotebook",
-                           background=self.bg_color,
-                           padding=5)
-        self.style.configure("Custom.TFrame",
-                           background=self.bg_color)
-        self.style.configure("Custom.TLabel",
-                           background=self.bg_color,
-                           foreground=self.text_color,
-                           font=("Segoe UI", 10))
-        self.style.configure("Custom.TButton",
-                           background=self.accent_color,
-                           foreground=self.text_color,
-                           padding=(10, 5),
-                           font=("Segoe UI", 10))
-        
-        # Create notebook with custom style
-        self.notebook = ttk.Notebook(root, style="Custom.TNotebook")
+        self.notebook = ttk.Notebook(root, style="Cyber.TNotebook")
         self.notebook.pack(expand=True, fill='both', padx=10, pady=10)
-        
-        # Main tab with custom styling
-        self.main_tab = ttk.Frame(self.notebook, style="Custom.TFrame")
+        self.main_tab = ttk.Frame(self.notebook, style="Cyber.TFrame")
         self.notebook.add(self.main_tab, text="Main")
-        
-        # Settings tab with custom styling
-        self.settings_tab = ttk.Frame(self.notebook, style="Custom.TFrame")
+        self.settings_tab = ttk.Frame(self.notebook, style="Cyber.TFrame")
         self.notebook.add(self.settings_tab, text="Sigma Settings")
-        
-        # Add tab hover effect
         self.notebook.bind("<Enter>", self.on_tab_hover)
         self.notebook.bind("<Leave>", self.on_tab_leave)
-        
         self.setup_main_tab()
         self.setup_settings_tab()
         self.setup_monogram_tab()
-
-        # Create main container for layout
         self.main_container = ttk.Frame(self.root)
         self.main_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-
-        # Left side: Text input and buttons
         self.left_frame = ttk.Frame(self.main_container)
         self.left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        
+        info_frame = ttk.Frame(self.left_frame)
+        info_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
         self.update_info = {}
-        self.update_info['time'] = ttk.Label(self.left_frame, text="time: 0")
-        self.update_info['Best Fitness'] = ttk.Label(self.left_frame, text="Best Fitness: 0")
-        self.update_info['Best text'] = ttk.Label(self.left_frame, text="Best text: 0")
-        self.update_info['Best key'] = ttk.Label(self.left_frame, text="Best key: 0")
-        for key in self.update_info:
-            self.update_info[key].pack(side=tk.TOP, anchor='w')
-            
-        # Add this line to track if decoding is running
+        self.update_info['time'] = ttk.Label(info_frame, text="Time: 0s")
+        self.update_info['time'].pack(anchor='w')
+        fitness_frame = ttk.Frame(info_frame)
+        fitness_frame.pack(fill=tk.X, pady=5)
+        ttk.Label(fitness_frame, text="Fitness Progress:", 
+                 font=("Consolas", 12, "bold")).pack(side=tk.LEFT)
+        self.progress_canvas = tk.Canvas(
+            fitness_frame,
+            width=300,
+            height=20,
+            bg=self.colors['dark_element'],
+            highlightbackground=self.colors['background'],
+            highlightthickness=1
+        )
+        self.progress_canvas.pack(side=tk.LEFT, padx=10, pady=5)
+        self.progress_canvas.create_rectangle(
+            2, 2, 298, 18,
+            fill='black',
+            outline=self.colors['accent1'],
+            width=1
+        )
+        self.progress_rect = self.progress_canvas.create_rectangle(
+            2, 2, 2, 18,
+            fill=self.colors['accent1'],
+            outline=self.colors['background'],
+            width=1,
+            stipple='gray50'
+        )
+        self.glow_rect = self.progress_canvas.create_rectangle(
+            2, 2, 2, 18,
+            fill='',
+            outline=self.colors['accent1'],
+            width=1,
+            stipple='gray75'
+        )
+        self.update_info['Best Fitness'] = ttk.Label(fitness_frame, text="0.0000")
+        self.update_info['Best Fitness'].pack(side=tk.LEFT)
+        self.update_info['Best text'] = ttk.Label(info_frame, text="Best text: ")
+        self.update_info['Best text'].pack(anchor='w')
+        self.update_info['Best key'] = ttk.Label(info_frame, text="Best key: ")
+        self.update_info['Best key'].pack(anchor='w')
         self.is_decoding = False
-        
-        # Start the periodic update
-        self.update_interval = 500  # 500ms = 0.5 seconds
+        self.update_interval = 500
         self.periodic_update()
- 
-        # self.monogram_button = ttk.Button(
-        #     self.left_frame,
-        #     text="Character Frequencies",
-        #     command=self.show_monogram_window
-        # )
-        # self.monogram_button.pack(side=tk.LEFT, padx=2)
-
         self.update_queue = Queue()
         self.process = None
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         self.start_time = None
+        self.current_cipher = None  # Add this line
+
+    def setup_theme_selector(self):
+        theme_frame = ttk.LabelFrame(self.settings_tab, text="Theme Settings", padding="5")
+        theme_frame.pack(fill='x', padx=5, pady=5)
+        themes = ['ocean_depths', 'desert_sunset', 'forest_night', 'arctic_aurora', 'cyber_neon']
+        self.theme_var = tk.StringVar(value=self.theme)
+        ttk.Label(theme_frame, text="Select Theme:").pack(side='left', padx=5)
+        theme_menu = ttk.OptionMenu(
+            theme_frame, 
+            self.theme_var, 
+            self.theme,
+            *themes,
+            command=self.change_theme
+        )
+        theme_menu.pack(side='left', padx=5)
+
+    def change_theme(self, theme_name):
+        color_palettes = ColorPalettes(theme_name)
+        self.colors = color_palettes.colors
+        self.theme = theme_name
+        self.update_widget_colors()
+        
+    def update_widget_colors(self):
+        self.root.configure(bg=self.colors['background'])
+        self.root.option_add("*foreground", self.colors['text'])
+        self.root.option_add("*background", self.colors['background'])
+        self.root.option_add("*selectBackground", self.colors['primary'])
+        self.root.option_add("*selectForeground", self.colors['background'])
+        self.style.configure("Cyber.TFrame",
+            background=self.colors['background'],
+            borderwidth=2,
+            relief="solid"
+        )
+        self.style.configure("Cyber.TLabel",
+            background=self.colors['background'],
+            foreground=self.colors['primary'],
+            font=("Consolas", 10)
+        )
+        self.style.configure("Cyber.TButton",
+            background=self.colors['dark_element'],
+            foreground=self.colors['primary']
+        )
+        self.style.map("Cyber.TButton",
+            background=[('active', self.colors['primary'])],
+            foreground=[('active', self.colors['background'])]
+        )
+        self.style.configure("Cyber.TNotebook",
+            background=self.colors['background'],
+            foreground=self.colors['text']
+        )
+        self.style.configure("Cyber.TNotebook.Tab",
+            background=self.colors['dark_element'],
+            foreground=self.colors['text']
+        )
+        for widget in [self.text_box, self.output_text]:
+            widget.configure(
+                bg=self.colors['dark_element'],
+                fg=self.colors['text'],
+                insertbackground=self.colors['primary'],
+                selectbackground=self.colors['primary'],
+                selectforeground=self.colors['background']
+            )
+        self.progress_canvas.configure(
+            bg=self.colors['dark_element'],
+            highlightbackground=self.colors['background']
+        )
+        self.root.update_idletasks()
 
     def on_tab_hover(self, event):
-        """Add hover effect to tabs"""
-        self.style.configure("Custom.TNotebook.Tab",
-                           background=self.accent_color)
+        self.style.configure("Cyber.TNotebook.Tab",
+                            background=self.colors['primary'])
 
     def on_tab_leave(self, event):
-        """Remove hover effect from tabs"""
-        self.style.configure("Custom.TNotebook.Tab",
-                           background=self.bg_color)
+        self.style.configure("Cyber.TNotebook.Tab",
+                            background=self.colors['dark_element'])
 
     def create_gradient_frame(self, parent):
-        """Create a frame with gradient effect"""
         gradient = tk.Canvas(parent, highlightthickness=0)
         gradient.pack(fill='both', expand=True)
-        
-        colors = [self.bg_color, self.accent_color]
-        for i in range(len(colors)-1):
-            gradient.create_gradient(colors[i], colors[i+1])
-        
+        gradient_colors = [
+            self.colors['background'],
+            self.colors['dark_element'],
+            self.colors['background']
+        ]
+        height = 400
+        for i in range(len(gradient_colors) - 1):
+            start_color = gradient_colors[i]
+            end_color = gradient_colors[i + 1]
+            for j in range(height // len(gradient_colors)):
+                y = i * (height // len(gradient_colors)) + j
+                gradient.create_line(
+                    0, y, 800, y,
+                    fill=self.interpolate_color(start_color, end_color, j/(height/len(gradient_colors)))
+                )
         return gradient
+        
+    def interpolate_color(self, color1, color2, factor):
+        r1, g1, b1 = [int(color1[i:i+2], 16) for i in (1, 3, 5)]
+        r2, g2, b2 = [int(color2[i:i+2], 16) for i in (1, 3, 5)]
+        r = int(r1 + (r2 - r1) * factor)
+        g = int(g1 + (g2 - g1) * factor)
+        b = int(b1 + (b2 - b1) * factor)
+        return f'#{r:02x}{g:02x}{b:02x}'
 
     def clear_all(self):
-        """Clear all input and output text fields"""
         if messagebox.askyesno("Confirm Clear", "Are you sure you want to clear all fields?"):
             self.text_box.delete('1.0', tk.END)
             self.output_text.delete('1.0', tk.END)
-            # Reset cipher selections
             self.var_substitution.set(False)
             self.var_transposition.set(False)
             self.var_vigenere.set(False)
-            # Hide Vigenere settings if visible
             self.vigenere_frame.pack_forget()
+
         
     def setup_main_tab(self):
-        # Input frame
-        input_frame = ttk.LabelFrame(self.main_tab, text="Input", padding="5")
+        input_frame = ttk.LabelFrame(self.main_tab, text="INPUT", style="Cyber.TFrame", padding="10")
         input_frame.pack(fill='both', expand=True, padx=5, pady=5)
-        
-        # Cipher text input
-        self.text_box = scrolledtext.ScrolledText(input_frame, height=10)
+        for child in input_frame.winfo_children():
+            child.configure(highlightthickness=2, highlightcolor=self.colors['primary'])
+        self.text_box = scrolledtext.ScrolledText(
+            input_frame, 
+            height=10,
+            bg=self.colors['dark_element'],
+            fg=self.colors['text'],
+            insertbackground=self.colors['primary'],
+            relief="solid",
+            borderwidth=2,
+            font=("Consolas", 10)
+        )
         self.text_box.pack(fill='both', expand=True, padx=5, pady=5)
-        
-        # Cipher selection frame
         cipher_frame = ttk.LabelFrame(self.main_tab, text="Cipher Selection", padding="5")
         cipher_frame.pack(fill='x', padx=5, pady=5)
-        
-        # Cipher checkboxes
         self.var_substitution = tk.BooleanVar()
-        self.var_transposition = tk.BooleanVar()  # Now used for shuffle
+        self.var_transposition = tk.BooleanVar()
         self.var_vigenere = tk.BooleanVar()
-        
         ttk.Checkbutton(cipher_frame, text="Substitution", variable=self.var_substitution).pack(side='left', padx=5)
         ttk.Checkbutton(cipher_frame, text="Shuffle", variable=self.var_transposition, command=self.toggle_cipher_settings).pack(side='left', padx=5)
         ttk.Checkbutton(cipher_frame, text="Vigenere", variable=self.var_vigenere, command=self.toggle_cipher_settings).pack(side='left', padx=5)
-        
-        # Add Polybius checkbox
         self.var_polybius = tk.BooleanVar()
         ttk.Checkbutton(cipher_frame, text="Polybius", 
                         variable=self.var_polybius,
                         command=self.toggle_cipher_settings).pack(side='left', padx=5)
-        
-        # Output frame
         output_frame = ttk.LabelFrame(self.main_tab, text="Output", padding="5")
         output_frame.pack(fill='both', expand=True, padx=5, pady=5)
-        
         self.output_text = scrolledtext.ScrolledText(output_frame, height=10)
         self.output_text.pack(fill='both', expand=True, padx=5, pady=5)
-        
-        # Control buttons
         button_frame = ttk.Frame(self.main_tab)
         button_frame.pack(fill='x', padx=5, pady=5)
-        
         ttk.Button(button_frame, text="Run Decoder", command=self.run_mcmc_algo).pack(side='left', padx=5)
         ttk.Button(button_frame, text="Clear", command=self.clear_all).pack(side='left', padx=5)
-        
-        # Add binding to text box for automatic updates
+        ttk.Button(button_frame, text="Terminate", command=self.stop).pack(side='left', padx=5)
         self.text_box.bind('<<Modified>>', self.update_monogram)
-        #update = tk.Label(self, text="My clicker app").pack()
         
     def setup_settings_tab(self):
         self.vigenere_frame = ttk.LabelFrame(self.settings_tab, text="Vigenere Cipher Settings", padding="5")
         self.vigenere_frame.pack(fill='x', padx=5, pady=5)
-        
         key_frame = ttk.Frame(self.vigenere_frame)
         key_frame.pack(fill='x', padx=5, pady=5)
-        
         ttk.Label(key_frame, text="Key Length Range:").pack(side='left', padx=5)
         self.min_key = tk.StringVar(value=str(config.MIN_KEY_LENGTH))
         self.max_key = tk.StringVar(value=str(config.MAX_KEY_LENGTH))
         ttk.Entry(key_frame, textvariable=self.min_key, width=5).pack(side='left', padx=2)
         ttk.Label(key_frame, text="to").pack(side='left', padx=2)
         ttk.Entry(key_frame, textvariable=self.max_key, width=5).pack(side='left', padx=2)
-        
         stat_frame = ttk.Frame(self.vigenere_frame)
         stat_frame.pack(fill='x', padx=5, pady=5)
-        
         ttk.Label(stat_frame, text="Expected IoC:").pack(side='left', padx=5)
         self.expected_ioc = tk.StringVar(value=str(config.EXPECTED_IOC))
         ttk.Entry(stat_frame, textvariable=self.expected_ioc, width=8).pack(side='left', padx=2)
-        
         ttk.Label(stat_frame, text="Target Fitness:").pack(side='left', padx=5)
         self.target_fitness = tk.StringVar(value=str(config.TARGET_FITNESS))
         ttk.Entry(stat_frame, textvariable=self.target_fitness, width=8).pack(side='left', padx=2)
-        
-        # Algorithm settings
         algo_frame = ttk.Frame(self.vigenere_frame)
         algo_frame.pack(fill='x', padx=5, pady=5)
-        
         ttk.Label(algo_frame, text="Max Iterations:").pack(side='left', padx=5)
         self.max_iterations = tk.StringVar(value=str(config.MAX_ITERATIONS))
         ttk.Entry(algo_frame, textvariable=self.max_iterations, width=10).pack(side='left', padx=2)
-        
-        # Parallel processing
         parallel_frame = ttk.Frame(self.vigenere_frame)
         parallel_frame.pack(fill='x', padx=5, pady=5)
-        
         self.use_parallel = tk.BooleanVar(value=config.USE_PARALLEL)
         ttk.Checkbutton(parallel_frame, text="Use Parallel Processing", variable=self.use_parallel).pack(side='left', padx=5)
-        
         ttk.Label(parallel_frame, text="Max Workers:").pack(side='left', padx=5)
         self.max_workers = tk.StringVar(value=str(config.MAX_WORKERS))
         ttk.Entry(parallel_frame, textvariable=self.max_workers, width=5).pack(side='left', padx=2)
-        
-        # Save settings button
         ttk.Button(self.vigenere_frame, text="Save Settings", command=self.save_settings).pack(pady=10)
-        
-        # Initially hide Vigenere settings
         self.vigenere_frame.pack_forget()
         key_override_frame = ttk.Frame(self.vigenere_frame)
         key_override_frame.pack(fill='x', padx=5, pady=5)
-        
         ttk.Label(key_override_frame, text="Force Key Length:").pack(side='left', padx=5)
         self.key_length_var = tk.StringVar()
         ttk.Entry(key_override_frame, textvariable=self.key_length_var, width=5).pack(side='left', padx=2)
         ttk.Label(key_override_frame, text="(leave empty for auto-detection)").pack(side='left', padx=5)
-
-        # Add Shuffle Cipher Settings
         self.shuffle_frame = ttk.LabelFrame(self.settings_tab, text="Shuffle Cipher Settings", padding="5")
         self.shuffle_frame.pack(fill='x', padx=5, pady=5)
-        
         shuffle_group_frame = ttk.Frame(self.shuffle_frame)
         shuffle_group_frame.pack(fill='x', padx=5, pady=5)
-        
         ttk.Label(shuffle_group_frame, text="Group Size Range:").pack(side='left', padx=5)
         self.min_shuffle_group = tk.StringVar(value="2")
         self.max_shuffle_group = tk.StringVar(value="8")
         ttk.Entry(shuffle_group_frame, textvariable=self.min_shuffle_group, width=5).pack(side='left', padx=2)
         ttk.Label(shuffle_group_frame, text="to").pack(side='left', padx=2)
         ttk.Entry(shuffle_group_frame, textvariable=self.max_shuffle_group, width=5).pack(side='left', padx=2)
-        
-        # Force specific group size
         shuffle_override_frame = ttk.Frame(self.shuffle_frame)
         shuffle_override_frame.pack(fill='x', padx=5, pady=5)
-        
         ttk.Label(shuffle_override_frame, text="Force Group Size:").pack(side='left', padx=5)
         self.force_group_size = tk.StringVar()
         ttk.Entry(shuffle_override_frame, textvariable=self.force_group_size, width=5).pack(side='left', padx=2)
         ttk.Label(shuffle_override_frame, text="(leave empty for auto-detection)").pack(side='left', padx=5)
-        
-        # Initially hide Shuffle settings
         self.shuffle_frame.pack_forget()
-        
-        # Add Polybius Settings
         self.polybius_frame = ttk.LabelFrame(self.settings_tab, text="Polybius Cipher Settings", padding="5")
         self.polybius_frame.pack(fill='x', padx=5, pady=5)
-        
-        # Initial key input
         key_frame = ttk.Frame(self.polybius_frame)
         key_frame.pack(fill='x', padx=5, pady=5)
-        
         ttk.Label(key_frame, text="Initial Key:").pack(side='left', padx=5)
         self.polybius_key = tk.StringVar()
         ttk.Entry(key_frame, textvariable=self.polybius_key, width=25).pack(side='left', padx=2)
         ttk.Label(key_frame, text="(optional)").pack(side='left', padx=5)
-        
-        # Initially hide Polybius settings
         self.polybius_frame.pack_forget()
 
     def toggle_vigenere_settings(self):
@@ -289,7 +377,6 @@ class CipherDecoderGUI:
             self.vigenere_frame.pack_forget()
 
     def toggle_cipher_settings(self):
-        """Show/hide cipher specific settings based on selection"""
         if self.var_vigenere.get():
             self.vigenere_frame.pack(fill='x', padx=5, pady=5)
         else:
@@ -322,7 +409,44 @@ class CipherDecoderGUI:
             messagebox.showinfo("Success", "Settings saved successfully!")
         else:
             messagebox.showerror("Error", "Invalid input values. Please check your settings.")
+    
+    def stop(self):
+        """Stop any running cipher process and display current best result"""
+        if not self.is_decoding:
+            return
             
+        # Get final results before stopping
+        if self.current_cipher == 'substitution':
+            current_result = self.cipher_manager.get_current_substitution_result()
+            self.cipher_manager.stop_substitution_decoder()
+        elif self.current_cipher == 'vigenere':
+            current_result = self.cipher_manager.get_current_vigenere_result()
+            self.cipher_manager.stop_vigenere_decoder()
+        elif self.current_cipher == 'shuffle':
+            current_result = self.cipher_manager.get_current_shuffle_result()
+            self.cipher_manager.stop_shuffle_decoder() 
+        elif self.current_cipher == 'polybius':
+            current_result = self.cipher_manager.get_current_polybius_result()
+            self.cipher_manager.stop_polybius_decoder()
+        
+        if self.process and self.process.is_alive():
+            self.process.terminate()
+        
+        self.is_decoding = False
+        
+        # Display the current best result
+        if current_result:
+            if self.current_cipher == 'vigenere':
+                self.display_vigenere_result(current_result)
+            elif self.current_cipher == 'shuffle':
+                self.display_shuffle_result(current_result)
+            elif self.current_cipher == 'polybius':
+                self.display_polybius_result(current_result)
+            else:
+                self.display_result(current_result)
+                
+        messagebox.showinfo("Stopped", "Decoding process terminated with best current result")
+
     def run_mcmc_algo(self):
         cipher_text = self.text_box.get("1.0", tk.END).strip()
         if not cipher_text:
@@ -332,7 +456,7 @@ class CipherDecoderGUI:
         self.selected_ciphers = []
         if self.var_substitution.get():
             self.selected_ciphers.append('substitution')
-        if self.var_transposition.get():  # Now checks for shuffle cipher
+        if self.var_transposition.get():  
             self.selected_ciphers.append('shuffle')
         if self.var_vigenere.get():
             self.selected_ciphers.append('vigenere')
@@ -344,16 +468,16 @@ class CipherDecoderGUI:
             return
         
         try:
-            self.is_decoding = True  # Set flag when starting decode
-            self.start_time = time.time()  # Start timing when decoding begins
+            self.is_decoding = True 
+            self.start_time = time.time()
+            self.current_cipher = self.selected_ciphers[0]  # Store current cipher type
             if 'vigenere' in self.selected_ciphers:
                 self.run_vigenere_decoder(cipher_text)
-            elif 'shuffle' in self.selected_ciphers:  # Changed from transposition
+            elif 'shuffle' in self.selected_ciphers: 
                 self.run_shuffle_decoder(cipher_text)
             elif 'polybius' in self.selected_ciphers:
                 self.run_polybius_decoder(cipher_text)
             else:
-                # Start decoding in separate process
                 self.process = Process(
                     target=self.cipher_manager.run_substitution_decoder,
                     args=(cipher_text, None, None, self.update_queue)
@@ -365,10 +489,8 @@ class CipherDecoderGUI:
             self.is_decoding = False
 
     def check_process(self):
-        """Check for updates from the decoding process"""
         if self.is_decoding:
             latest_update = None
-            # Empty the queue and keep only the latest update
             try:
                 while True:
                     update = self.update_queue.get_nowait()
@@ -381,25 +503,29 @@ class CipherDecoderGUI:
             except queue.Empty:
                 pass
 
-            # Process only the most recent update
             if latest_update:
                 current_time = time.time() - self.start_time
                 self.update_info['time'].config(text=f"Time: {current_time:.1f}s")
-                self.update_info['Best Fitness'].config(text=f"Best Fitness: {latest_update['score']:.4f}")
+                fitness_score = latest_update['score']
+                width = int((2.0 - fitness_score) * 187.5)
+                self.progress_canvas.coords(
+                    self.progress_rect,
+                    2, 2, 2 + width, 18
+                )
+                self.progress_canvas.coords(
+                    self.glow_rect,
+                    2, 2, 2 + width, 18
+                )
+                self.update_info['Best Fitness'].config(text=f"{fitness_score:.4f}")
                 self.update_info['Best text'].config(text=f"Best text: {latest_update['text'][:50]}...")
                 self.update_info['Best key'].config(text=f"Best key: {latest_update['key']}")
             
-            # Schedule next check
-            self.root.after(self.update_interval, self.check_process)
-            
-    # Add this new method to CipherDecoderGUI class
+            self.root.after(50, self.check_process)
+
     def run_vigenere_decoder(self, cipher_text):
-        """Handle Vigenere cipher decoding"""
-        # Update status
         self.output_text.delete('1.0', tk.END)
         
         def progress_callback(message):
-            """Callback to update GUI with progress"""
             self.output_text.insert('end', f"{message}\n")
             self.output_text.see('end')
             self.root.update()
@@ -423,7 +549,6 @@ class CipherDecoderGUI:
             messagebox.showerror("Error", f"Decryption failed: {result['error']}")
 
     def run_shuffle_decoder(self, cipher_text):
-        """Handle Shuffle cipher decoding"""
         self.output_text.delete('1.0', tk.END)
         
         def progress_callback(message):
@@ -450,7 +575,6 @@ class CipherDecoderGUI:
             messagebox.showerror("Error", f"Decryption failed: {result['error']}")
 
     def display_shuffle_result(self, result):
-        """Display Shuffle decoder results"""
         self.output_text.delete('1.0', tk.END)
         
         if result['success']:
@@ -468,7 +592,6 @@ class CipherDecoderGUI:
             messagebox.showerror("Error", error_msg)
 
     def run_polybius_decoder(self, cipher_text):
-        """Handle Polybius cipher decoding"""
         self.output_text.delete('1.0', tk.END)
         
         def progress_callback(message):
@@ -490,7 +613,6 @@ class CipherDecoderGUI:
             messagebox.showerror("Error", f"Decryption failed: {result['error']}")
 
     def display_polybius_result(self, result):
-        """Display Polybius decoder results"""
         self.output_text.delete('1.0', tk.END)
         
         if result['success']:
@@ -506,41 +628,32 @@ class CipherDecoderGUI:
             self.output_text.insert('1.0', error_msg)
             messagebox.showerror("Error", error_msg)
 
-    # Add this wherever you handle text changes
     def update_text(self, event=None):
-        text = self.text_input.get("1.0", tk.END)  # Assuming you have a text input widget
-        self.monogram_graph.update_graph(text.replace(" ",""))
+        text = self.text_input.get("1.0", tk.END)
+        self.monogram_graph.update_graph(text)
         self.text_input.bind("<KeyRelease>", self.update_text)
 
-    # Update show_monogram_window method
     def show_monogram_window(self):
-        self.notebook.select(2)  # Switch to monogram tab
+        self.notebook.select(2)
 
-    # Add this method to CipherDecoderGUI class
     def setup_monogram_tab(self):
         monogram_frame = ttk.Frame(self.notebook)
         self.notebook.add(monogram_frame, text="Character Analysis")
-        
-        # Add instruction label
         ttk.Label(
             monogram_frame, 
             text="Enter text in the main input box to see character frequency analysis",
             style="Info.TLabel"
         ).pack(pady=10)
-        
-        # Add monogram graph
         self.monogram_graph = MonogramGraph(monogram_frame)
         self.monogram_graph.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
     def update_monogram(self, event=None):
         text = self.text_box.get("1.0", tk.END).strip()
         if hasattr(self, 'monogram_graph'):
-            self.monogram_graph.update_graph(text)
-        # Reset modified flag
+            self.monogram_graph.update_graph(text.replace(" ",""))
         self.text_box.edit_modified(False)
 
     def display_result(self, result):
-        """Display MCMC decoder results"""
         self.output_text.delete('1.0', tk.END)
         
         if result['success']:
@@ -555,7 +668,6 @@ class CipherDecoderGUI:
         self.output_text.insert('1.0', output_text)
 
     def display_vigenere_result(self, result):
-        """Display Vigenere decoder results"""
         self.output_text.delete('1.0', tk.END)
         
         if result['success']:
@@ -567,12 +679,11 @@ class CipherDecoderGUI:
             self.output_text.insert('1.0', output_text)
             messagebox.showinfo("Success", f"Decryption completed! Key found: {result['key']}")
         else:
-            error_msg = f"Decryption failed: {result.get('error', 'Unknown error')}"
+            error_msg = f"Decryption failed: {result['error', 'Unknown error']}"
             self.output_text.insert('1.0', error_msg)
             messagebox.showerror("Error", error_msg)
 
     def periodic_update(self):
-        """Remove this method since we're now handling updates in check_process"""
         pass
 
     def on_closing(self):
@@ -580,22 +691,15 @@ class CipherDecoderGUI:
             self.process.terminate()
         self.root.destroy()
 
-# Add this class after CipherDecoderGUI class
 class MonogramWindow:
     def __init__(self, parent, text_widget):
         self.window = tk.Toplevel(parent)
         self.window.title("Character Frequency Analysis")
         self.window.geometry("600x400")
-        
-        # Create monogram graph
         self.graph = MonogramGraph(self.window)
         self.graph.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        # Update with current text
         self.text_widget = text_widget
         self.update_graph()
-        
-        # Bind text widget updates
         self.text_widget.bind("<<Modified>>", self.update_graph)
         
     def update_graph(self, event=None):
@@ -611,7 +715,5 @@ def main():
     app = CipherDecoderGUI(root)
     root.mainloop()
 
-if __name__ == "__main__":
-    main()
 if __name__ == "__main__":
     main()
