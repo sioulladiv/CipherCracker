@@ -2,12 +2,34 @@ import string
 import random
 import math
 from collections import Counter
-from cipher_utils import bigram_fitness  # Changed from relative to absolute import
-import argparse
-from config import *  # Changed from relative to absolute import
+from cipher_utils import bigram_fitness  # Use absolute import
+from config import *  # Use absolute import
 import time
 from multiprocessing import Value, Array
+import argparse
 import ctypes
+
+def run_substitution_process(cipher_text, queue=None):
+    """Standalone function to run substitution decoding in a separate process"""
+    try:
+        cracker = SubstitutionCracker()
+        cracker.queue = queue
+        plaintext, key, score = cracker.decrypt(cipher_text)
+        
+        # Ensure we clean up shared memory
+        cracker._cleanup_shared_memory()
+        
+        return {
+            'plaintext': plaintext,
+            'key': key,
+            'score': score,
+            'success': True
+        }
+    except Exception as e:
+        return {
+            'success': False,
+            'error': str(e)
+        }
 
 class SubstitutionCracker:
     def __init__(self):
@@ -21,23 +43,66 @@ class SubstitutionCracker:
         self.best_score = float('inf')
         self.best_text = ""
         self.best_key = ""
-        self.queue = None  # Add this line
-        # Add shared memory variables
-        self.shared_score = Value(ctypes.c_double, float('inf'))
-        self.shared_text = Array(ctypes.c_char, 1000)  # Adjust size as needed
-        self.shared_key = Array(ctypes.c_char, 27)  # Length of alphabet + 1
-        self.start_time = None
+        self.queue = None
+        self._init_shared_memory()
+
+    def _init_shared_memory(self):
+        """Initialize shared memory variables"""
+        try:
+            self.shared_score = Value(ctypes.c_double, float('inf'))
+            self.shared_text = Array(ctypes.c_char, 1000)
+            self.shared_key = Array(ctypes.c_char, 27)
+        except Exception as e:
+            print(f"Warning: Could not initialize shared memory: {e}")
+            self.shared_score = None
+            self.shared_text = None
+            self.shared_key = None
+
+    def _cleanup_shared_memory(self):
+        """Clean up shared memory resources"""
+        try:
+            if hasattr(self, 'shared_score'):
+                self.shared_score = None
+            if hasattr(self, 'shared_text'):
+                self.shared_text = None
+            if hasattr(self, 'shared_key'):
+                self.shared_key = None
+        except:
+            pass
 
     def update_progress(self, message):
-        """Update progress if callback is set"""
+        "update"
         if self.progress_callback:
             self.progress_callback(message)
 
     def create_random_key(self):
-        """Generate random initial substitution key"""
-        letters = list(self.LETTERS)
-        random.shuffle(letters)
-        return ''.join(letters)
+        """Create initial key by mapping letter frequencies"""
+        # Standard English letter frequencies from most to least common
+        english_freq = list("ETAOINSHRDLCUMWFGYPBVKJXQZ")
+        
+        # Count frequencies in ciphertext
+        freq_count = Counter(self.ciphertext)
+        
+        # Sort cipher letters by frequency, most common first
+        cipher_freq = sorted(set(self.LETTERS), 
+                           key=lambda x: freq_count.get(x, 0),
+                           reverse=True)
+        
+        # Create mapping of cipher letters to english letters
+        key_dict = {}
+        for i in range(len(self.LETTERS)):
+            if i < len(cipher_freq):
+                key_dict[cipher_freq[i]] = english_freq[i]
+            else:
+                # Handle any missing letters
+                unused = [c for c in english_freq if c not in key_dict.values()]
+                unmapped = [c for c in self.LETTERS if c not in key_dict.keys()]
+                for c, e in zip(unmapped, unused):
+                    key_dict[c] = e
+        
+        # Create key string in correct order
+        key = ''.join(key_dict[c] for c in self.LETTERS)
+        return key
 
     def swap_letters(self, key):
         """Create new key by swapping two random positions"""
@@ -65,7 +130,7 @@ class SubstitutionCracker:
         }
 
     def monte_carlo_optimization(self, ciphertext):
-        """Optimize key using Monte Carlo with simulated annealing"""
+        self.ciphertext = ciphertext
         self.start_time = time.time()
         current_key = self.create_random_key()
         current_score = bigram_fitness(self.decrypt_with_key(ciphertext, current_key))
@@ -74,16 +139,20 @@ class SubstitutionCracker:
         temp = self.temperature
 
         for i in range(self.iterations):
-            if i % 100 == 0:
+            if i % 10 == 0:  # Update every 10 iterations instead of 100
                 self.update_progress(f"Optimization iteration {i}/{self.iterations}")
-            
-            # Generate neighbor solution
-            self.best_text = self.decrypt_with_key(ciphertext, self.best_key)
-            new_key = self.swap_letters(current_key)
-            new_score = bigram_fitness(self.decrypt_with_key(ciphertext, new_key))
+                if self.queue:
+                    self.queue.put({
+                        'type': 'progress',
+                        'score': current_score,
+                        'text': self.decrypt_with_key(ciphertext, current_key),
+                        'key': current_key
+                    })
 
-            if not self.running:
-                break
+            # Create neighbor solution
+            new_key = self.swap_letters(current_key)
+            new_text = self.decrypt_with_key(ciphertext, new_key)
+            new_score = bigram_fitness(new_text)
             
             # Calculate acceptance probability
             delta = new_score - current_score
@@ -94,9 +163,9 @@ class SubstitutionCracker:
                 if current_score < self.best_score:
                     self.best_score = current_score
                     self.best_key = current_key
-                    self.best_text = self.decrypt_with_key(ciphertext, current_key)
+                    self.best_text = new_text
                     
-                    # Update shared memory
+                    # Update shared memory and queue more frequently
                     self.shared_score.value = current_score
                     self.shared_text.value = self.best_text[:1000].encode()
                     self.shared_key.value = current_key.encode()
@@ -104,14 +173,10 @@ class SubstitutionCracker:
                     if self.queue:
                         self.queue.put({
                             'type': 'progress',
-                            'score': self.shared_score.value,
-                            'text': self.shared_text.value.decode(),
-                            'key': self.shared_key.value.decode()
+                            'score': self.best_score,
+                            'text': self.best_text,
+                            'key': self.best_key
                         })
-                    self.update_progress(f"New best score: {self.best_score:.4f}")
-                    if self.best_score < 0.41:
-                        break
-            
             # Cool down
             temp *= self.cooling_rate
 

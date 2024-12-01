@@ -1,106 +1,121 @@
 from cipher_utils import bigram_fitness
 import config
-from ciphers import VigenereCracker, SubstitutionCracker, ShuffleCracker, PolybiusCracker
+from ciphers import VigenereCracker, SubstitutionCracker, ShuffleCracker, PolybiusCracker, PlayfairCracker
+
+def run_substitution_process_wrapper(cipher_text, queue):
+    """Standalone wrapper function for running substitution process"""
+    from ciphers.substitution import run_substitution_process
+    try:
+        result = run_substitution_process(cipher_text, queue)
+        if queue:
+            queue.put({'type': 'finished', 'result': result})
+        return result
+    except Exception as e:
+        if queue:
+            queue.put({'type': 'finished', 'result': {'success': False, 'error': str(e)}})
+        return {'success': False, 'error': str(e)}
 
 class CipherManager:
     def __init__(self):
-        self.vigenere_cracker = VigenereCracker()
-        self.substitution_cracker = SubstitutionCracker()
-        self.shuffle_cracker = ShuffleCracker()
-        self.polybius_cracker = PolybiusCracker()
+        self.current_cipher = None
+        self.crackers = {
+            'vigenere': VigenereCracker(),
+            'substitution': SubstitutionCracker(),
+            'shuffle': ShuffleCracker(),
+            'polybius': PolybiusCracker(),
+            'playfair': PlayfairCracker()
+        }
 
-    def stop_vigenere_decoder(self):
-        """Stop Vigenere cracker process"""
-        if hasattr(self.vigenere_cracker, 'running'):
-            self.vigenere_cracker.running = False
-    
-    def stop_substitution_decoder(self):
-        """Stop substitution cracker process"""
-        if hasattr(self.substitution_cracker, 'running'):
-            self.substitution_cracker.running = False
+    def start_decoder(self, cipher_type, cipher_text, **kwargs):
+        """
+        Central method to handle starting any cipher decoder
+        """
+        self.current_cipher = cipher_type.lower()
+        if self.current_cipher not in self.crackers:
+            return {'success': False, 'error': f'Unknown cipher type: {cipher_type}'}
 
-    def stop_shuffle_decoder(self):
-        """Stop shuffle cracker process"""
-        if hasattr(self.shuffle_cracker, 'running'):
-            self.shuffle_cracker.running = False
-            
-    def stop_polybius_decoder(self):
-        """Stop polybius cracker process"""
-        if hasattr(self.polybius_cracker, 'running'):
-            self.polybius_cracker.running = False
-
-    def updateInfoSubstition(self):
-        """Get current metrics from substitution cracker"""
-        return self.substitution_cracker.updateMssg()
-    
-    def run_shuffle_decoder(self, cipher_text, group_length=None, progress_callback=None):
-            """Handle Vigenere cipher decoding"""
-            if progress_callback:
-                self.shuffle_cracker.progress_callback = progress_callback
+        cracker = self.crackers[self.current_cipher]
+        
+        # Set progress callback if provided
+        if 'progress_callback' in kwargs:
+            cracker.progress_callback = kwargs.pop('progress_callback')
+        
+        # Get queue but don't pass it to decrypt()
+        queue = kwargs.pop('queue', None)
+        
+        try:
+            if self.current_cipher == 'substitution':
+                return run_substitution_process_wrapper(cipher_text, queue)
+            else:
+                # Set target fitness on cracker instance instead of passing as parameter
+                target_fitness = getattr(config, f"{self.current_cipher.upper()}_TARGET_FITNESS", 0.4)
+                if hasattr(cracker, 'target_fitness'):
+                    cracker.target_fitness = target_fitness
                 
-            try:
-                plaintext, key, score = self.shuffle_cracker.decrypt(cipher_text, group_length)
+                # Only pass core parameters to decrypt()
+                decrypt_kwargs = {
+                    'forced_length': kwargs.get('forced_length'),
+                    'initial_key': kwargs.get('initial_key')
+                }
+                # Remove None values
+                decrypt_kwargs = {k: v for k, v in decrypt_kwargs.items() if v is not None}
+                
+                plaintext, key, score = cracker.decrypt(cipher_text, **decrypt_kwargs)
+                
+                if queue:
+                    queue.put({
+                        'type': 'progress',
+                        'score': score,
+                        'text': plaintext,
+                        'key': key
+                    })
+                    
                 return {
                     'plaintext': plaintext,
                     'key': key,
                     'score': score,
                     'success': True
                 }
-            except Exception as e:
-                return {
-                    'success': False,
-                    'error': str(e)
-                }
-
-    def run_vigenere_decoder(self, cipher_text, forced_length=None, progress_callback=None):
-        """Handle Vigenere cipher decoding"""
-        if progress_callback:
-            self.vigenere_cracker.progress_callback = progress_callback
-            
-        try:
-            plaintext, key, score = self.vigenere_cracker.decrypt(cipher_text, forced_length)
-            return {
-                'plaintext': plaintext,
-                'key': key,
-                'score': score,
-                'success': True
-            }
         except Exception as e:
             return {
                 'success': False,
                 'error': str(e)
             }
 
-    def run_substitution_decoder(self, cipher_text, forced_length=None, progress_callback=None, queue=None):
-        """Handle substitution cipher decoding with process communication"""
-        try:
-            self.substitution_cracker.progress_callback = progress_callback
-            # Pass queue to substitution cracker
-            self.substitution_cracker.queue = queue
-            plaintext, key, score = self.substitution_cracker.decrypt(cipher_text)
+    def stop_decoder(self):
+        """
+        Stop the current cipher cracker
+        """
+        if not self.current_cipher:
+            return
             
-            if queue:
-                result = {
-                    'plaintext': plaintext,
-                    'key': key,
-                    'score': score,
-                    'success': True
-                }
-                queue.put({'type': 'finished', 'result': result})
+        cracker = self.crackers[self.current_cipher]
+        if hasattr(cracker, 'running'):
+            cracker.running = False
+
+    def get_current_result(self):
+        """
+        Get the current best result from the active cracker
+        """
+        if not self.current_cipher:
+            return None
             
-            return {
-                'plaintext': plaintext,
-                'key': key,
-                'score': score,
-                'success': True
-            }
-        except Exception as e:
-            if queue:
-                queue.put({'type': 'finished', 'result': {'success': False, 'error': str(e)}})
-            return {
-                'success': False,
-                'error': str(e)
-            }
+        cracker = self.crackers[self.current_cipher]
+        if not hasattr(cracker, 'best_text'):
+            return None
+
+        result = {
+            'success': True,
+            'text': cracker.best_text,
+            'key': cracker.best_key,
+            'score': cracker.best_score
+        }
+        
+        # Handle different text field names for different ciphers
+        if self.current_cipher != 'substitution':
+            result['plaintext'] = result.pop('text')
+            
+        return result
 
     def update_config(self, settings):
         """Update configuration settings"""
@@ -114,69 +129,14 @@ class CipherManager:
             config.MAX_WORKERS = int(settings.get('max_workers', config.MAX_WORKERS))
             config.MIN_SHUFFLE_GROUP = int(settings.get('min_shuffle_group', config.MIN_SHUFFLE_GROUP))
             config.MAX_SHUFFLE_GROUP = int(settings.get('max_shuffle_group', config.MAX_SHUFFLE_GROUP))
+            
+            # Update target fitness for each cipher type
+            config.TARGET_FITNESS = float(settings.get('target_fitness', 0.4))
+            config.VIGENERE_TARGET_FITNESS = float(settings.get('vigenere_target_fitness', 0.4))
+            config.SHUFFLE_TARGET_FITNESS = float(settings.get('shuffle_target_fitness', 0.4))
+            config.POLYBIUS_TARGET_FITNESS = float(settings.get('polybius_target_fitness', 0.4))
+            config.PLAYFAIR_TARGET_FITNESS = float(settings.get('playfair_target_fitness', 0.4))
+            
             return True
         except ValueError:
             return False
-
-    def run_polybius_decoder(self, cipher_text, initial_key=None, progress_callback=None):
-        """Handle Polybius cipher decoding"""
-        if progress_callback:
-            self.polybius_cracker.progress_callback = progress_callback
-            
-        try:
-            plaintext, key, score = self.polybius_cracker.decrypt(cipher_text, initial_key)
-            return {
-                'plaintext': plaintext,
-                'key': key,
-                'score': score,
-                'success': True
-            }
-        except Exception as e:
-            return {
-                'success': False,
-                'error': str(e)
-            }
-
-    def get_current_substitution_result(self):
-        """Get current best result from substitution cracker"""
-        if not hasattr(self.substitution_cracker, 'best_text'):
-            return None
-        return {
-            'success': True,
-            'text': self.substitution_cracker.best_text,
-            'key': self.substitution_cracker.best_key,
-            'score': self.substitution_cracker.best_score
-        }
-
-    def get_current_vigenere_result(self):
-        """Get current best result from vigenere cracker"""
-        if not hasattr(self.vigenere_cracker, 'best_text'):
-            return None
-        return {
-            'success': True,
-            'plaintext': self.vigenere_cracker.best_text,
-            'key': self.vigenere_cracker.best_key,
-            'score': self.vigenere_cracker.best_score
-        }
-
-    def get_current_shuffle_result(self):
-        """Get current best result from shuffle cracker"""
-        if not hasattr(self.shuffle_cracker, 'best_text'):
-            return None
-        return {
-            'success': True,
-            'plaintext': self.shuffle_cracker.best_text,
-            'key': self.shuffle_cracker.best_key,
-            'score': self.shuffle_cracker.best_score
-        }
-
-    def get_current_polybius_result(self):
-        """Get current best result from polybius cracker"""
-        if not hasattr(self.polybius_cracker, 'best_text'):
-            return None
-        return {
-            'success': True,
-            'plaintext': self.polybius_cracker.best_text,
-            'key': self.polybius_cracker.best_key,
-            'score': self.polybius_cracker.best_score
-        }

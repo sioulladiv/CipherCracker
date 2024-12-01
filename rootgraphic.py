@@ -9,7 +9,11 @@ from multiprocessing import Process, Queue
 import queue
 import time
 from colours import ColorPalettes
+from cipher_manager import run_substitution_process_wrapper
+from threading import Thread
 
+def run_subprocess(cipher_text, queue):
+    return run_substitution_process_wrapper(cipher_text, queue)
 
 class CipherDecoderGUI:
     def __init__(self, root):
@@ -144,13 +148,14 @@ class CipherDecoderGUI:
         self.update_info['Best key'] = ttk.Label(info_frame, text="Best key: ")
         self.update_info['Best key'].pack(anchor='w')
         self.is_decoding = False
-        self.update_interval = 500
+        self.update_interval = 50  # Change from 500 to 50 milliseconds
         self.periodic_update()
-        self.update_queue = Queue()
+        self.update_queue = None  # Change this line - initialize as None
         self.process = None
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         self.start_time = None
         self.current_cipher = None  # Add this line
+        self.selected_ciphers = []  # Add this line
 
     def setup_theme_selector(self):
         theme_frame = ttk.LabelFrame(self.settings_tab, text="Theme Settings", padding="5")
@@ -293,6 +298,10 @@ class CipherDecoderGUI:
         ttk.Checkbutton(cipher_frame, text="Polybius", 
                         variable=self.var_polybius,
                         command=self.toggle_cipher_settings).pack(side='left', padx=5)
+        self.var_playfair = tk.BooleanVar()
+        ttk.Checkbutton(cipher_frame, text="Playfair", 
+                       variable=self.var_playfair,
+                       command=self.toggle_cipher_settings).pack(side='left', padx=5)
         output_frame = ttk.LabelFrame(self.main_tab, text="Output", padding="5")
         output_frame.pack(fill='both', expand=True, padx=5, pady=5)
         self.output_text = scrolledtext.ScrolledText(output_frame, height=10)
@@ -305,7 +314,49 @@ class CipherDecoderGUI:
         self.text_box.bind('<<Modified>>', self.update_monogram)
         
     def setup_settings_tab(self):
+        # Add common fitness frame at top of settings tab
+        common_frame = ttk.LabelFrame(self.settings_tab, text="Common Settings", padding="5")
+        common_frame.pack(fill='x', padx=5, pady=5)
+        
+        fitness_frame = ttk.Frame(common_frame)
+        fitness_frame.pack(fill='x', padx=5, pady=5)
+        ttk.Label(fitness_frame, text="Target Fitness Score:").pack(side='left', padx=5)
+        self.target_fitness = tk.StringVar(value="0.4")
+        ttk.Entry(fitness_frame, textvariable=self.target_fitness, width=8).pack(side='left', padx=2)
+
+        # Add target fitness settings to each cipher frame
         self.vigenere_frame = ttk.LabelFrame(self.settings_tab, text="Vigenere Cipher Settings", padding="5")
+        # ...existing vigenere frame setup...
+        vigenere_fitness_frame = ttk.Frame(self.vigenere_frame)
+        vigenere_fitness_frame.pack(fill='x', padx=5, pady=5)
+        ttk.Label(vigenere_fitness_frame, text="Vigenere Target Fitness:").pack(side='left', padx=5)
+        self.vigenere_target_fitness = tk.StringVar(value="0.4")
+        ttk.Entry(vigenere_fitness_frame, textvariable=self.vigenere_target_fitness, width=8).pack(side='left', padx=2)
+
+        self.shuffle_frame = ttk.LabelFrame(self.settings_tab, text="Shuffle Cipher Settings", padding="5")
+        # ...existing shuffle frame setup...
+        shuffle_fitness_frame = ttk.Frame(self.shuffle_frame)
+        shuffle_fitness_frame.pack(fill='x', padx=5, pady=5)
+        ttk.Label(shuffle_fitness_frame, text="Shuffle Target Fitness:").pack(side='left', padx=5)
+        self.shuffle_target_fitness = tk.StringVar(value="0.4")
+        ttk.Entry(shuffle_fitness_frame, textvariable=self.shuffle_target_fitness, width=8).pack(side='left', padx=2)
+
+        self.polybius_frame = ttk.LabelFrame(self.settings_tab, text="Polybius Cipher Settings", padding="5")
+        # ...existing polybius frame setup...
+        polybius_fitness_frame = ttk.Frame(self.polybius_frame)
+        polybius_fitness_frame.pack(fill='x', padx=5, pady=5)
+        ttk.Label(polybius_fitness_frame, text="Polybius Target Fitness:").pack(side='left', padx=5)
+        self.polybius_target_fitness = tk.StringVar(value="0.4")
+        ttk.Entry(polybius_fitness_frame, textvariable=self.polybius_target_fitness, width=8).pack(side='left', padx=2)
+
+        self.playfair_frame = ttk.LabelFrame(self.settings_tab, text="Playfair Cipher Settings", padding="5")
+        # ...existing playfair frame setup...
+        playfair_fitness_frame = ttk.Frame(self.playfair_frame)
+        playfair_fitness_frame.pack(fill='x', padx=5, pady=5)
+        ttk.Label(playfair_fitness_frame, text="Playfair Target Fitness:").pack(side='left', padx=5)
+        self.playfair_target_fitness = tk.StringVar(value="0.4")
+        ttk.Entry(playfair_fitness_frame, textvariable=self.playfair_target_fitness, width=8).pack(side='left', padx=2)
+
         self.vigenere_frame.pack(fill='x', padx=5, pady=5)
         key_frame = ttk.Frame(self.vigenere_frame)
         key_frame.pack(fill='x', padx=5, pady=5)
@@ -369,6 +420,14 @@ class CipherDecoderGUI:
         ttk.Entry(key_frame, textvariable=self.polybius_key, width=25).pack(side='left', padx=2)
         ttk.Label(key_frame, text="(optional)").pack(side='left', padx=5)
         self.polybius_frame.pack_forget()
+        self.playfair_frame = ttk.LabelFrame(self.settings_tab, text="Playfair Cipher Settings", padding="5")
+        self.playfair_frame.pack(fill='x', padx=5, pady=5)
+        key_frame = ttk.Frame(self.playfair_frame)
+        key_frame.pack(fill='x', padx=5, pady=5)
+        ttk.Label(key_frame, text="Initial Key (optional):").pack(side='left', padx=5)
+        self.playfair_key = tk.StringVar()
+        ttk.Entry(key_frame, textvariable=self.playfair_key, width=25).pack(side='left', padx=2)
+        self.playfair_frame.pack_forget()
 
     def toggle_vigenere_settings(self):
         if self.var_vigenere.get():
@@ -392,6 +451,11 @@ class CipherDecoderGUI:
         else:
             self.polybius_frame.pack_forget()
             
+        if self.var_playfair.get():
+            self.playfair_frame.pack(fill='x', padx=5, pady=5)
+        else:
+            self.playfair_frame.pack_forget()
+            
     def save_settings(self):
         settings = {
             'min_key_length': self.min_key.get(),
@@ -402,7 +466,12 @@ class CipherDecoderGUI:
             'use_parallel': self.use_parallel.get(),
             'max_workers': self.max_workers.get(),
             'min_shuffle_group': self.min_shuffle_group.get(),
-            'max_shuffle_group': self.max_shuffle_group.get()
+            'max_shuffle_group': self.max_shuffle_group.get(),
+            'target_fitness': self.target_fitness.get(),
+            'vigenere_target_fitness': self.vigenere_target_fitness.get(),
+            'shuffle_target_fitness': self.shuffle_target_fitness.get(),
+            'polybius_target_fitness': self.polybius_target_fitness.get(),
+            'playfair_target_fitness': self.playfair_target_fitness.get(),
         }
         
         if self.cipher_manager.update_config(settings):
@@ -411,48 +480,64 @@ class CipherDecoderGUI:
             messagebox.showerror("Error", "Invalid input values. Please check your settings.")
     
     def stop(self):
-        """Stop any running cipher process and display current best result"""
         if not self.is_decoding:
             return
             
-        # Get final results before stopping
-        if self.current_cipher == 'substitution':
-            current_result = self.cipher_manager.get_current_substitution_result()
-            self.cipher_manager.stop_substitution_decoder()
-        elif self.current_cipher == 'vigenere':
-            current_result = self.cipher_manager.get_current_vigenere_result()
-            self.cipher_manager.stop_vigenere_decoder()
-        elif self.current_cipher == 'shuffle':
-            current_result = self.cipher_manager.get_current_shuffle_result()
-            self.cipher_manager.stop_shuffle_decoder() 
-        elif self.current_cipher == 'polybius':
-            current_result = self.cipher_manager.get_current_polybius_result()
-            self.cipher_manager.stop_polybius_decoder()
+        # Get current best result before stopping processes
+        current_result = self.cipher_manager.get_current_result()
         
-        if self.process and self.process.is_alive():
-            self.process.terminate()
+        # Only create default if no result exists at all
+        if current_result is None:
+            # Get latest info from GUI elements as fallback
+            current_result = {
+                'success': True,
+                'key': self.update_info['Best key'].cget('text').replace('Best key: ', ''),
+                'score': float(self.update_info['Best Fitness'].cget('text')),
+                'text': self.update_info['Best text'].cget('text').replace('Best text: ', ''),
+                'plaintext': self.update_info['Best text'].cget('text').replace('Best text: ', '')
+            }
         
+        # Stop processes
+        self.cipher_manager.stop_decoder()
+        self.cleanup_process()
         self.is_decoding = False
         
         # Display the current best result
-        if current_result:
-            if self.current_cipher == 'vigenere':
-                self.display_vigenere_result(current_result)
-            elif self.current_cipher == 'shuffle':
-                self.display_shuffle_result(current_result)
-            elif self.current_cipher == 'polybius':
-                self.display_polybius_result(current_result)
-            else:
-                self.display_result(current_result)
-                
-        messagebox.showinfo("Stopped", "Decoding process terminated with best current result")
+        self.display_result(current_result)
+        
+        # Reset GUI elements after showing result
+        self.update_info['time'].config(text="Time: 0s")
+        self.progress_canvas.coords(self.progress_rect, 2, 2, 2, 18)
+        self.progress_canvas.coords(self.glow_rect, 2, 2, 2, 18)
 
     def run_mcmc_algo(self):
+        # If already running, stop current process first
+        if self.is_decoding:
+            self.stop()
+            # Small delay to ensure cleanup
+            self.root.after(100, lambda: self._start_new_process())
+        else:
+            self._start_new_process()
+
+    def progress_callback(self, message):
+        """Global progress callback method"""
+        self.output_text.insert('end', f"{message}\n")
+        self.output_text.see('end')
+        self.root.update()
+
+    def _start_new_process(self):
+        # Ensure any existing process is fully cleaned up
+        self.cleanup_process()
+        
+        # Initialize a fresh queue for each run
+        self.update_queue = Queue()
+        
         cipher_text = self.text_box.get("1.0", tk.END).strip()
         if not cipher_text:
             messagebox.showwarning("Warning", "Please enter cipher text!")
             return
-                
+        
+        # Reset and populate selected ciphers
         self.selected_ciphers = []
         if self.var_substitution.get():
             self.selected_ciphers.append('substitution')
@@ -462,171 +547,128 @@ class CipherDecoderGUI:
             self.selected_ciphers.append('vigenere')
         if self.var_polybius.get():
             self.selected_ciphers.append('polybius')
+        if self.var_playfair.get():
+            self.selected_ciphers.append('playfair')
                 
         if not self.selected_ciphers:
             messagebox.showwarning("Warning", "Please select at least one cipher type!")
             return
-        
+            
+        # Rest of the existing process starting code...
         try:
-            self.is_decoding = True 
+            self.is_decoding = True
             self.start_time = time.time()
-            self.current_cipher = self.selected_ciphers[0]  # Store current cipher type
-            if 'vigenere' in self.selected_ciphers:
-                self.run_vigenere_decoder(cipher_text)
-            elif 'shuffle' in self.selected_ciphers: 
-                self.run_shuffle_decoder(cipher_text)
-            elif 'polybius' in self.selected_ciphers:
-                self.run_polybius_decoder(cipher_text)
-            else:
+            self.current_cipher = self.selected_ciphers[0]
+            
+            self.output_text.delete('1.0', tk.END)
+            
+            # Build kwargs based on cipher type
+            kwargs = {
+                'queue': self.update_queue,
+                'progress_callback': self.progress_callback
+            }
+            
+            if self.current_cipher == 'vigenere':
+                if self.key_length_var.get():
+                    kwargs['forced_length'] = int(self.key_length_var.get())
+            elif self.current_cipher in ['polybius', 'playfair']:
+                if getattr(self, f'{self.current_cipher}_key').get():
+                    kwargs['initial_key'] = getattr(self, f'{self.current_cipher}_key').get()
+            
+            # Start decoder in separate thread
+            if self.current_cipher == 'substitution':
                 self.process = Process(
-                    target=self.cipher_manager.run_substitution_decoder,
-                    args=(cipher_text, None, None, self.update_queue)
+                    target=run_subprocess,
+                    args=(cipher_text, self.update_queue)
                 )
+                self.process.daemon = True
                 self.process.start()
-                self.check_process()
+            else:
+                decode_thread = Thread(
+                    target=self._run_decoder_thread,
+                    args=(cipher_text, kwargs),
+                    daemon=True
+                )
+                decode_thread.start()
+            
+            self.check_process()
+                
         except Exception as e:
+            self.cleanup_process()
             messagebox.showerror("Error", f"An error occurred: {str(e)}")
             self.is_decoding = False
 
+    def _run_decoder_thread(self, cipher_text, kwargs):
+        """Run decoder in separate thread and put results in queue"""
+        try:
+            result = self.cipher_manager.start_decoder(
+                self.current_cipher,
+                cipher_text,
+                **kwargs
+            )
+            self.update_queue.put({'type': 'finished', 'result': result})
+        except Exception as e:
+            self.update_queue.put({
+                'type': 'finished', 
+                'result': {'success': False, 'error': str(e)}
+            })
+
+    def cleanup_process(self):
+        """Clean up existing process and queue"""
+        if self.process and self.process.is_alive():
+            self.process.terminate()
+            self.process.join(timeout=1) 
+            self.process = None
+        
+        if self.update_queue:
+            while True:
+                try:
+                    self.update_queue.get_nowait()
+                except queue.Empty:
+                    break
+            self.update_queue = None
+
     def check_process(self):
+        """Check for updates from decoder process/thread"""
         if self.is_decoding:
-            latest_update = None
             try:
                 while True:
-                    update = self.update_queue.get_nowait()
-                    if update.get('type') == 'progress':
-                        latest_update = update
-                    elif update.get('type') == 'finished':
-                        self.is_decoding = False
-                        self.display_result(update['result'])
-                        return
-            except queue.Empty:
-                pass
+                    try:
+                        update = self.update_queue.get_nowait()
+                        if update.get('type') == 'progress':
+                            self.update_display(update, time.time() - self.start_time)
+                        elif update.get('type') == 'finished':
+                            self.is_decoding = False
+                            self.display_result(update['result'])
+                            return
+                    except queue.Empty:
+                        break
+                        
+                self.root.after(50, self.check_process)
+            except Exception as e:
+                self.is_decoding = False
+                messagebox.showerror("Error", f"Update error: {str(e)}")
 
-            if latest_update:
-                current_time = time.time() - self.start_time
-                self.update_info['time'].config(text=f"Time: {current_time:.1f}s")
-                fitness_score = latest_update['score']
-                width = int((2.0 - fitness_score) * 187.5)
-                self.progress_canvas.coords(
-                    self.progress_rect,
-                    2, 2, 2 + width, 18
-                )
-                self.progress_canvas.coords(
-                    self.glow_rect,
-                    2, 2, 2 + width, 18
-                )
-                self.update_info['Best Fitness'].config(text=f"{fitness_score:.4f}")
-                self.update_info['Best text'].config(text=f"Best text: {latest_update['text'][:50]}...")
-                self.update_info['Best key'].config(text=f"Best key: {latest_update['key']}")
-            
-            self.root.after(50, self.check_process)
-
-    def run_vigenere_decoder(self, cipher_text):
-        self.output_text.delete('1.0', tk.END)
+    def update_display(self, update, current_time):
+        """Update GUI elements with latest progress"""
+        self.update_info['time'].config(text=f"Time: {current_time:.1f}s")
         
-        def progress_callback(message):
-            self.output_text.insert('end', f"{message}\n")
-            self.output_text.see('end')
-            self.root.update()
-        
-        forced_length = None
-        if hasattr(self, 'key_length_var') and self.key_length_var.get():
-            try:
-                forced_length = int(self.key_length_var.get())
-            except ValueError:
-                pass
-
-        result = self.cipher_manager.run_vigenere_decoder(
-            cipher_text, 
-            forced_length, 
-            progress_callback
+        fitness_score = update['score']
+        width = int((2.0 - fitness_score) * 187.5)
+        self.progress_canvas.coords(
+            self.progress_rect,
+            2, 2, 2 + width, 18
         )
-
-        if result['success']:
-            self.display_vigenere_result(result)
-        else:
-            messagebox.showerror("Error", f"Decryption failed: {result['error']}")
-
-    def run_shuffle_decoder(self, cipher_text):
-        self.output_text.delete('1.0', tk.END)
-        
-        def progress_callback(message):
-            self.output_text.insert('end', f"{message}\n")
-            self.output_text.see('end')
-            self.root.update()
-        
-        forced_size = None
-        if self.force_group_size.get():
-            try:
-                forced_size = int(self.force_group_size.get())
-            except ValueError:
-                pass
-
-        result = self.cipher_manager.run_shuffle_decoder(
-            cipher_text,
-            forced_size,
-            progress_callback
+        self.progress_canvas.coords(
+            self.glow_rect,
+            2, 2, 2 + width, 18
         )
-
-        if result['success']:
-            self.display_shuffle_result(result)
-        else:
-            messagebox.showerror("Error", f"Decryption failed: {result['error']}")
-
-    def display_shuffle_result(self, result):
-        self.output_text.delete('1.0', tk.END)
         
-        if result['success']:
-            output_text = "=== Shuffle Decryption Results ===\n"
-            output_text += f"Permutation: {result['key']}\n"
-            output_text += f"Group size: {len(result['key'])}\n"
-            output_text += f"Fitness score: {result['score']:.4f}\n"
-            output_text += f"\nDecrypted text:\n{result['plaintext']}\n"
-            
-            self.output_text.insert('1.0', output_text)
-            messagebox.showinfo("Success", f"Decryption completed! Group size: {len(result['key'])}")
-        else:
-            error_msg = f"Decryption failed: {result.get('error', 'Unknown error')}"
-            self.output_text.insert('1.0', error_msg)
-            messagebox.showerror("Error", error_msg)
-
-    def run_polybius_decoder(self, cipher_text):
-        self.output_text.delete('1.0', tk.END)
+        self.update_info['Best Fitness'].config(text=f"{fitness_score:.4f}")
+        self.update_info['Best text'].config(text=f"Best text: {update['text'][:50]}...")
+        self.update_info['Best key'].config(text=f"Best key: {update['key']}")
         
-        def progress_callback(message):
-            self.output_text.insert('end', f"{message}\n")
-            self.output_text.see('end')
-            self.root.update()
-
-        initial_key = self.polybius_key.get() if self.polybius_key.get() else None
-        
-        result = self.cipher_manager.run_polybius_decoder(
-            cipher_text,
-            initial_key,
-            progress_callback
-        )
-
-        if result['success']:
-            self.display_polybius_result(result)
-        else:
-            messagebox.showerror("Error", f"Decryption failed: {result['error']}")
-
-    def display_polybius_result(self, result):
-        self.output_text.delete('1.0', tk.END)
-        
-        if result['success']:
-            output_text = "=== Polybius Decryption Results ===\n"
-            output_text += f"Key: {result['key']}\n"
-            output_text += f"Fitness score: {result['score']:.4f}\n"
-            output_text += f"\nDecrypted text:\n{result['plaintext']}\n"
-            
-            self.output_text.insert('1.0', output_text)
-            messagebox.showinfo("Success", "Decryption completed!")
-        else:
-            error_msg = f"Decryption failed: {result.get('error', 'Unknown error')}"
-            self.output_text.insert('1.0', error_msg)
-            messagebox.showerror("Error", error_msg)
+        self.root.update_idletasks()
 
     def update_text(self, event=None):
         text = self.text_input.get("1.0", tk.END)
@@ -656,14 +698,51 @@ class CipherDecoderGUI:
     def display_result(self, result):
         self.output_text.delete('1.0', tk.END)
         
-        if result['success']:
+        if result and result.get('success', False):  # Check if result exists and has success
+            text_key = 'text' if 'text' in result else 'plaintext'
             output_text = "Decryption completed.\n"
             output_text += f"Key: {str(result.get('key', 'N/A'))}\n"
             output_text += f"Fitness Score: {result.get('score', 0.0):.4f}\n"
             output_text += f"Iterations: {result.get('iterations', 0)}\n"
-            output_text += f"Decrypted Text: {str(result.get('text', 'N/A'))}"
+            output_text += f"Decrypted Text: {str(result.get(text_key, 'N/A'))}"
+            
+            popup = tk.Toplevel(self.root)
+            popup.title("Decryption Result")
+            popup.geometry("400x200")
+            popup.configure(bg=self.colors['background'])
+            
+            popup.transient(self.root)
+            popup.grab_set()
+            
+            frame = ttk.Frame(popup, style="Cyber.TFrame", padding="10")
+            frame.pack(expand=True, fill='both', padx=10, pady=10)
+            
+            ttk.Label(frame, text="Decryption Status", 
+                     style="Cyber.TLabel",
+                     font=("Consolas", 12, "bold")).pack(pady=5)
+            
+            ttk.Label(frame, text=f"Key Found: {str(result.get('key', 'N/A'))}",
+                     style="Cyber.TLabel").pack(pady=5)
+            
+            ttk.Label(frame, text=f"Fitness Score: {result.get('score', 0.0):.4f}",
+                     style="Cyber.TLabel").pack(pady=5)
+        
+            ttk.Label(frame, text=f"Text: {str(result.get(text_key, 'N/A'))[:50]}...",
+                     style="Cyber.TLabel",
+                     wraplength=350).pack(pady=5)
+            
+            ttk.Button(frame, text="OK",
+                      style="Cyber.TButton",
+                      command=popup.destroy).pack(pady=10)
+            
+            popup.update_idletasks()
+            x = self.root.winfo_x() + (self.root.winfo_width() // 2) - (popup.winfo_width() // 2)
+            y = self.root.winfo_y() + (self.root.winfo_height() // 2) - (popup.winfo_height() // 2)
+            popup.geometry(f"+{x}+{y}")
         else:
-            output_text = f"Decryption failed: {result.get('error', 'Unknown error')}\n"
+            output_text = "Decryption terminated or failed.\n"
+            if result:
+                output_text += f"Error: {result.get('error', 'Unknown error')}\n"
             
         self.output_text.insert('1.0', output_text)
 
@@ -677,9 +756,42 @@ class CipherDecoderGUI:
             output_text += f"\nDecrypted text:\n{result['plaintext']}\n"
             
             self.output_text.insert('1.0', output_text)
-            messagebox.showinfo("Success", f"Decryption completed! Key found: {result['key']}")
+            
+            # Create success popup
+            popup = tk.Toplevel(self.root)
+            popup.title("Vigenère Decryption Success!")
+            popup.geometry("400x200")
+            popup.configure(bg=self.colors['background'])
+            
+            # Make popup modal
+            popup.transient(self.root)
+            popup.grab_set()
+            
+            # Style the popup
+            frame = ttk.Frame(popup, style="Cyber.TFrame", padding="10")
+            frame.pack(expand=True, fill='both', padx=10, pady=10)
+            
+            ttk.Label(frame, text="🔓 Vigenère Cipher Solved!", 
+                     style="Cyber.TLabel",
+                     font=("Consolas", 12, "bold")).pack(pady=5)
+            
+            ttk.Label(frame, text=f"Key Found: {result['key']}",
+                     style="Cyber.TLabel").pack(pady=5)
+            
+            ttk.Label(frame, text=f"Fitness Score: {result['score']:.4f}",
+                     style="Cyber.TLabel").pack(pady=5)
+            
+            ttk.Button(frame, text="OK",
+                      style="Cyber.TButton",
+                      command=popup.destroy).pack(pady=10)
+            
+            # Center popup on main window
+            popup.update_idletasks()
+            x = self.root.winfo_x() + (self.root.winfo_width() // 2) - (popup.winfo_width() // 2)
+            y = self.root.winfo_y() + (self.root.winfo_height() // 2) - (popup.winfo_height() // 2)
+            popup.geometry(f"+{x}+{y}")
         else:
-            error_msg = f"Decryption failed: {result['error', 'Unknown error']}"
+            error_msg = f"Decryption failed: {result.get('error', 'Unknown error')}"
             self.output_text.insert('1.0', error_msg)
             messagebox.showerror("Error", error_msg)
 
@@ -687,8 +799,7 @@ class CipherDecoderGUI:
         pass
 
     def on_closing(self):
-        if self.process and self.process.is_alive():
-            self.process.terminate()
+        self.cleanup_process()
         self.root.destroy()
 
 class MonogramWindow:

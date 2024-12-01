@@ -39,3 +39,7 @@ MAX_SHUFFLE_GROUP = 8
 # Polybius cipher settings
 POLYBIUS_CHARSET = 'ABCDEFGHIKLMNOPQRSTUVWXYZ'  # I/J combined
 POLYBIUS_SIZE = 5  # 5x5 grid
+
+"""Playfair cipher settings"""
+PLAYFAIR_IGNORE_J = True  # Replace J with I
+PLAYFAIR_PAD_CHAR = 'X'  # Character used for padding odd-length text

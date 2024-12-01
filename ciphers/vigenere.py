@@ -11,6 +11,10 @@ class VigenereCracker:
         self.ENGLISH_FREQS = ENGLISH_FREQS
         self.EXPECTED_IOC = EXPECTED_IOC
         self.progress_callback = None
+        self.best_score = float('inf')
+        self.best_text = ""
+        self.best_key = ""
+        self.target_fitness = 0.4  # Add default target fitness
 
     def update_progress(self, message):
         """Update progress if callback is set"""
@@ -164,27 +168,33 @@ class VigenereCracker:
         return chr(ord('A') + best_shift)
 
     def decrypt(self, ciphertext, forced_length=None):
-        self.update_progress("Preprocessing input text...")
-        ciphertext = ''.join(c.upper() for c in ciphertext if c.isalpha())
-        if not ciphertext:
-            raise ValueError("No valid characters in input text")
-    
-        self.update_progress("Determining key length...")
-        key_length = forced_length if forced_length else self.determine_key_length(ciphertext)
-    
-        self.update_progress("Analyzing frequency patterns...")
-        with ThreadPoolExecutor() as executor:
-            columns = [''.join(ciphertext[i::key_length]) for i in range(key_length)]
-            key_chars = list(executor.map(self.analyze_column, columns))
-    
-        initial_key = ''.join(key_chars)
-        self.update_progress(f"Initial key found: {initial_key}")
-    
-        self.update_progress("Optimizing key...")
-        plaintext, key, score = self.try_key_permutations(ciphertext, initial_key)
-        self.update_progress(f"Final key found: {key}")
-    
-        return plaintext, key, score
+        try:
+            self.update_progress("Preprocessing input text...")
+            ciphertext = ''.join(c.upper() for c in ciphertext if c.isalpha())
+            if not ciphertext:
+                raise ValueError("No valid characters in input text")
+        
+            self.update_progress("Determining key length...")
+            key_length = forced_length if forced_length else self.determine_key_length(ciphertext)
+        
+            self.update_progress("Analyzing frequency patterns...")
+            with ThreadPoolExecutor() as executor:
+                columns = [''.join(ciphertext[i::key_length]) for i in range(key_length)]
+                key_chars = list(executor.map(self.analyze_column, columns))
+        
+            initial_key = ''.join(key_chars)
+            self.update_progress(f"Initial key found: {initial_key}")
+        
+            self.update_progress("Optimizing key...")
+            plaintext, key, score = self.try_key_permutations(ciphertext, initial_key)
+            self.update_progress(f"Final key found: {key}")
+        
+            if self.best_score < float('inf'):
+                return self.best_text, self.best_key, self.best_score
+            return plaintext, key, score
+        except Exception as e:
+            print(f"Error in Vigenere decrypt: {e}")
+            raise
     
 def main():
     parser = argparse.ArgumentParser(description='Vigenere Cipher Decoder')
